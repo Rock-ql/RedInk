@@ -1,8 +1,7 @@
 import logging
 import os
 import re
-import base64
-import yaml
+import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from backend.utils.text_client import get_text_chat_client
@@ -11,58 +10,82 @@ logger = logging.getLogger(__name__)
 
 
 class OutlineService:
-    def __init__(self):
+    def __init__(self, user_id: Optional[int] = None):
         logger.debug("初始化 OutlineService...")
+        self.user_id = user_id
         self.text_config = self._load_text_config()
         self.client = self._get_client()
         self.prompt_template = self._load_prompt_template()
         logger.info(f"OutlineService 初始化完成，使用服务商: {self.text_config.get('active_provider')}")
 
     def _load_text_config(self) -> dict:
-        """加载文本生成配置"""
-        config_path = Path(__file__).parent.parent.parent / 'text_providers.yaml'
-        logger.debug(f"加载文本配置: {config_path}")
+        """从数据库加载文本生成配置"""
+        from backend.models import ProviderConfig
 
-        if config_path.exists():
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f) or {}
-                logger.debug(f"文本配置加载成功: active={config.get('active_provider')}")
-                return config
-            except yaml.YAMLError as e:
-                logger.error(f"文本配置 YAML 解析失败: {e}")
-                raise ValueError(
-                    f"文本配置文件格式错误: text_providers.yaml\n"
-                    f"YAML 解析错误: {e}\n"
-                    "解决方案：检查 YAML 缩进和语法"
-                )
+        logger.debug(f"从数据库加载文本配置 (user_id={self.user_id})...")
 
-        logger.warning("text_providers.yaml 不存在，使用默认配置")
-        # 默认配置
-        return {
-            'active_provider': 'google_gemini',
-            'providers': {
-                'google_gemini': {
-                    'type': 'google_gemini',
-                    'model': 'gemini-2.0-flash-exp',
-                    'temperature': 1.0,
-                    'max_output_tokens': 8000
-                }
+        # 查询用户的文本服务商配置
+        query = ProviderConfig.query.filter_by(category='text')
+        if self.user_id:
+            query = query.filter_by(user_id=self.user_id)
+
+        providers_db = query.all()
+
+        if not providers_db:
+            logger.warning("数据库中没有文本服务商配置")
+            raise ValueError(
+                "未找到任何文本生成服务商配置。\n"
+                "解决方案：在系统设置页面添加文本生成服务商"
+            )
+
+        # 构建配置字典
+        providers = {}
+        active_provider = None
+
+        for p in providers_db:
+            config = {
+                'type': p.provider_type,
+                'api_key': p.api_key,
+                'base_url': p.base_url,
+                'model': p.model,
             }
+            # 合并 extra_config
+            if p.extra_config:
+                try:
+                    extra = json.loads(p.extra_config)
+                    config.update(extra)
+                except json.JSONDecodeError:
+                    pass
+
+            providers[p.name] = config
+
+            if p.is_active:
+                active_provider = p.name
+
+        if not active_provider:
+            logger.warning("没有激活的文本服务商")
+            raise ValueError(
+                "未找到激活的文本生成服务商。\n"
+                "解决方案：在系统设置页面激活一个文本生成服务商"
+            )
+
+        logger.debug(f"文本配置加载成功: active={active_provider}, providers={list(providers.keys())}")
+
+        return {
+            'active_provider': active_provider,
+            'providers': providers
         }
 
     def _get_client(self):
         """根据配置获取客户端"""
-        active_provider = self.text_config.get('active_provider', 'google_gemini')
+        active_provider = self.text_config.get('active_provider')
         providers = self.text_config.get('providers', {})
 
         if not providers:
             logger.error("未找到任何文本生成服务商配置")
             raise ValueError(
                 "未找到任何文本生成服务商配置。\n"
-                "解决方案：\n"
-                "1. 在系统设置页面添加文本生成服务商\n"
-                "2. 或手动编辑 text_providers.yaml 文件"
+                "解决方案：在系统设置页面添加文本生成服务商"
             )
 
         if active_provider not in providers:
@@ -221,7 +244,7 @@ class OutlineService:
                     "1. Text API 配置错误或密钥无效\n"
                     "2. 网络连接问题\n"
                     "3. 模型无法访问或不存在\n"
-                    "建议：检查配置文件 text_providers.yaml"
+                    "建议：在系统设置页面检查文本服务商配置"
                 )
 
             return {
@@ -230,9 +253,12 @@ class OutlineService:
             }
 
 
-def get_outline_service() -> OutlineService:
+def get_outline_service(user_id: Optional[int] = None) -> OutlineService:
     """
     获取大纲生成服务实例
     每次调用都创建新实例以确保配置是最新的
+
+    Args:
+        user_id: 用户 ID，用于加载用户特定的配置
     """
-    return OutlineService()
+    return OutlineService(user_id=user_id)

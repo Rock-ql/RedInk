@@ -3,10 +3,10 @@ import logging
 import os
 import uuid
 import time
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Generator, List, Optional, Tuple
-from backend.config import Config
 from backend.generators.factory import ImageGeneratorFactory
 from backend.utils.image_compressor import compress_image
 
@@ -20,21 +20,48 @@ class ImageService:
     MAX_CONCURRENT = 15  # 最大并发数
     AUTO_RETRY_COUNT = 3  # 自动重试次数
 
-    def __init__(self, provider_name: str = None):
+    def __init__(self, provider_name: str = None, user_id: Optional[int] = None):
         """
         初始化图片生成服务
 
         Args:
             provider_name: 服务商名称，如果为None则使用配置文件中的激活服务商
+            user_id: 用户 ID，用于加载用户特定的配置
         """
         logger.debug("初始化 ImageService...")
+        self.user_id = user_id
+
+        # 从数据库加载用户配置
+        image_config = self._load_image_config()
 
         # 获取服务商配置
         if provider_name is None:
-            provider_name = Config.get_active_image_provider()
+            provider_name = image_config.get('active_provider')
+
+        if not provider_name:
+            raise ValueError(
+                "未找到激活的图片生成服务商。\n"
+                "解决方案：在系统设置页面添加并激活图片生成服务商"
+            )
 
         logger.info(f"使用图片服务商: {provider_name}")
-        provider_config = Config.get_image_provider_config(provider_name)
+
+        providers = image_config.get('providers', {})
+        if provider_name not in providers:
+            available = ', '.join(providers.keys()) if providers else '无'
+            raise ValueError(
+                f"未找到图片生成服务商配置: {provider_name}\n"
+                f"可用的服务商: {available}\n"
+                "解决方案：在系统设置页面添加该服务商"
+            )
+
+        provider_config = providers[provider_name]
+
+        if not provider_config.get('api_key'):
+            raise ValueError(
+                f"图片服务商 {provider_name} 未配置 API Key\n"
+                "解决方案：在系统设置页面编辑该服务商，填写 API Key"
+            )
 
         # 创建生成器实例
         provider_type = provider_config.get('type', provider_name)
@@ -66,6 +93,61 @@ class ImageService:
         self._task_states: Dict[str, Dict] = {}
 
         logger.info(f"ImageService 初始化完成: provider={provider_name}, type={provider_type}")
+
+    def _load_image_config(self) -> dict:
+        """从数据库加载图片生成配置"""
+        from backend.models import ProviderConfig
+
+        logger.debug(f"从数据库加载图片配置 (user_id={self.user_id})...")
+
+        # 查询用户的图片服务商配置
+        query = ProviderConfig.query.filter_by(category='image')
+        if self.user_id:
+            query = query.filter_by(user_id=self.user_id)
+
+        providers_db = query.all()
+
+        if not providers_db:
+            logger.warning("数据库中没有图片服务商配置")
+            return {'active_provider': '', 'providers': {}}
+
+        # 构建配置字典
+        providers = {}
+        active_provider = None
+
+        for p in providers_db:
+            config = {
+                'type': p.provider_type,
+                'api_key': p.api_key,
+                'base_url': p.base_url,
+                'model': p.model,
+            }
+            # 合并 extra_config
+            if p.extra_config:
+                try:
+                    extra = json.loads(p.extra_config)
+                    config.update(extra)
+                except json.JSONDecodeError:
+                    pass
+
+            providers[p.name] = config
+
+            if p.is_active:
+                active_provider = p.name
+
+        if not active_provider:
+            logger.warning("没有激活的图片服务商")
+            raise ValueError(
+                "未找到激活的图片生成服务商。\n"
+                "解决方案：在系统设置页面激活一个图片生成服务商"
+            )
+
+        logger.debug(f"图片配置加载成功: active={active_provider}, providers={list(providers.keys())}")
+
+        return {
+            'active_provider': active_provider,
+            'providers': providers
+        }
 
     def _load_prompt_template(self, short: bool = False) -> str:
         """加载 Prompt 模板"""
@@ -761,14 +843,18 @@ class ImageService:
 # 全局服务实例
 _service_instance = None
 
-def get_image_service() -> ImageService:
-    """获取全局图片生成服务实例"""
-    global _service_instance
-    if _service_instance is None:
-        _service_instance = ImageService()
-    return _service_instance
+def get_image_service(user_id: Optional[int] = None) -> ImageService:
+    """
+    获取图片生成服务实例
+
+    每次调用都创建新实例以确保使用用户特定的配置
+
+    Args:
+        user_id: 用户 ID，用于加载用户特定的配置
+    """
+    return ImageService(user_id=user_id)
+
 
 def reset_image_service():
-    """重置全局服务实例（配置更新后调用）"""
-    global _service_instance
-    _service_instance = None
+    """重置服务实例（保留用于兼容性，但现在每次都创建新实例）"""
+    pass

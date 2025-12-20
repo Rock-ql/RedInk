@@ -15,6 +15,7 @@ import zipfile
 import logging
 from flask import Blueprint, request, jsonify, send_file
 from backend.services.history import get_history_service
+from backend.utils.auth import jwt_required, get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ def create_history_blueprint():
     # ==================== CRUD 操作 ====================
 
     @history_bp.route('/history', methods=['POST'])
+    @jwt_required
     def create_history():
         """
         创建历史记录
@@ -51,8 +53,9 @@ def create_history_blueprint():
                     "error": "参数错误：topic 和 outline 不能为空。\n请提供主题和大纲内容。"
                 }), 400
 
+            user_id = get_current_user_id()
             history_service = get_history_service()
-            record_id = history_service.create_record(topic, outline, task_id)
+            record_id = history_service.create_record(topic, outline, task_id, user_id=user_id)
 
             return jsonify({
                 "success": True,
@@ -67,6 +70,7 @@ def create_history_blueprint():
             }), 500
 
     @history_bp.route('/history', methods=['GET'])
+    @jwt_required
     def list_history():
         """
         获取历史记录列表（分页）
@@ -87,8 +91,9 @@ def create_history_blueprint():
             page_size = int(request.args.get('page_size', 20))
             status = request.args.get('status')
 
+            user_id = get_current_user_id()
             history_service = get_history_service()
-            result = history_service.list_records(page, page_size, status)
+            result = history_service.list_records(page, page_size, status, user_id=user_id)
 
             return jsonify({
                 "success": True,
@@ -103,6 +108,7 @@ def create_history_blueprint():
             }), 500
 
     @history_bp.route('/history/<record_id>', methods=['GET'])
+    @jwt_required
     def get_history(record_id):
         """
         获取历史记录详情
@@ -115,8 +121,9 @@ def create_history_blueprint():
         - record: 完整的记录数据
         """
         try:
+            user_id = get_current_user_id()
             history_service = get_history_service()
-            record = history_service.get_record(record_id)
+            record = history_service.get_record(record_id, user_id=user_id)
 
             if not record:
                 return jsonify({
@@ -137,6 +144,7 @@ def create_history_blueprint():
             }), 500
 
     @history_bp.route('/history/<record_id>', methods=['PUT'])
+    @jwt_required
     def update_history(record_id):
         """
         更新历史记录
@@ -160,13 +168,15 @@ def create_history_blueprint():
             status = data.get('status')
             thumbnail = data.get('thumbnail')
 
+            user_id = get_current_user_id()
             history_service = get_history_service()
             success = history_service.update_record(
                 record_id,
                 outline=outline,
                 images=images,
                 status=status,
-                thumbnail=thumbnail
+                thumbnail=thumbnail,
+                user_id=user_id
             )
 
             if not success:
@@ -187,6 +197,7 @@ def create_history_blueprint():
             }), 500
 
     @history_bp.route('/history/<record_id>', methods=['DELETE'])
+    @jwt_required
     def delete_history(record_id):
         """
         删除历史记录
@@ -198,8 +209,9 @@ def create_history_blueprint():
         - success: 是否成功
         """
         try:
+            user_id = get_current_user_id()
             history_service = get_history_service()
-            success = history_service.delete_record(record_id)
+            success = history_service.delete_record(record_id, user_id=user_id)
 
             if not success:
                 return jsonify({
@@ -221,6 +233,7 @@ def create_history_blueprint():
     # ==================== 搜索和统计 ====================
 
     @history_bp.route('/history/search', methods=['GET'])
+    @jwt_required
     def search_history():
         """
         搜索历史记录
@@ -241,8 +254,9 @@ def create_history_blueprint():
                     "error": "参数错误：keyword 不能为空。\n请提供搜索关键词。"
                 }), 400
 
+            user_id = get_current_user_id()
             history_service = get_history_service()
-            results = history_service.search_records(keyword)
+            results = history_service.search_records(keyword, user_id=user_id)
 
             return jsonify({
                 "success": True,
@@ -257,6 +271,7 @@ def create_history_blueprint():
             }), 500
 
     @history_bp.route('/history/stats', methods=['GET'])
+    @jwt_required
     def get_history_stats():
         """
         获取历史记录统计信息
@@ -267,8 +282,9 @@ def create_history_blueprint():
         - by_status: 按状态分组的统计
         """
         try:
+            user_id = get_current_user_id()
             history_service = get_history_service()
-            stats = history_service.get_statistics()
+            stats = history_service.get_statistics(user_id=user_id)
 
             return jsonify({
                 "success": True,
@@ -285,6 +301,7 @@ def create_history_blueprint():
     # ==================== 扫描和同步 ====================
 
     @history_bp.route('/history/scan/<task_id>', methods=['GET'])
+    @jwt_required
     def scan_task(task_id):
         """
         扫描单个任务并同步图片列表
@@ -313,6 +330,7 @@ def create_history_blueprint():
             }), 500
 
     @history_bp.route('/history/scan-all', methods=['POST'])
+    @jwt_required
     def scan_all_tasks():
         """
         扫描所有任务并同步图片列表
@@ -343,6 +361,7 @@ def create_history_blueprint():
     # ==================== 下载功能 ====================
 
     @history_bp.route('/history/<record_id>/download', methods=['GET'])
+    @jwt_required
     def download_history_zip(record_id):
         """
         下载历史记录的所有图片为 ZIP 文件
@@ -355,8 +374,9 @@ def create_history_blueprint():
         - 失败：JSON 错误信息
         """
         try:
+            user_id = get_current_user_id()
             history_service = get_history_service()
-            record = history_service.get_record(record_id)
+            record = history_service.get_record(record_id, user_id=user_id)
 
             if not record:
                 return jsonify({

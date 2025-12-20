@@ -15,6 +15,7 @@ import base64
 import logging
 from flask import Blueprint, request, jsonify, Response, send_file
 from backend.services.image import get_image_service
+from backend.utils.auth import jwt_required, get_current_user_id
 from .utils import log_request, log_error
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ def create_image_blueprint():
     # ==================== 图片生成 ====================
 
     @image_bp.route('/generate', methods=['POST'])
+    @jwt_required
     def generate_images():
         """
         批量生成图片（SSE 流式返回）
@@ -69,7 +71,8 @@ def create_image_blueprint():
                 }), 400
 
             logger.info(f"🖼️  开始图片生成任务: {task_id}, 共 {len(pages)} 页")
-            image_service = get_image_service()
+            user_id = get_current_user_id()
+            image_service = get_image_service(user_id=user_id)
 
             def generate():
                 """SSE 事件生成器"""
@@ -162,6 +165,7 @@ def create_image_blueprint():
     # ==================== 重试和重新生成 ====================
 
     @image_bp.route('/retry', methods=['POST'])
+    @jwt_required
     def retry_single_image():
         """
         重试生成单张失败的图片
@@ -194,7 +198,8 @@ def create_image_blueprint():
                 }), 400
 
             logger.info(f"🔄 重试生成图片: task={task_id}, page={page.get('index')}")
-            image_service = get_image_service()
+            user_id = get_current_user_id()
+            image_service = get_image_service(user_id=user_id)
             result = image_service.retry_single_image(task_id, page, use_reference)
 
             if result["success"]:
@@ -213,6 +218,7 @@ def create_image_blueprint():
             }), 500
 
     @image_bp.route('/retry-failed', methods=['POST'])
+    @jwt_required
     def retry_failed_images():
         """
         批量重试失败的图片（SSE 流式返回）
@@ -242,7 +248,8 @@ def create_image_blueprint():
                 }), 400
 
             logger.info(f"🔄 批量重试失败图片: task={task_id}, 共 {len(pages)} 页")
-            image_service = get_image_service()
+            user_id = get_current_user_id()
+            image_service = get_image_service(user_id=user_id)
 
             def generate():
                 """SSE 事件生成器"""
@@ -271,6 +278,7 @@ def create_image_blueprint():
             }), 500
 
     @image_bp.route('/regenerate', methods=['POST'])
+    @jwt_required
     def regenerate_image():
         """
         重新生成图片（即使成功的也可以重新生成）
@@ -307,7 +315,8 @@ def create_image_blueprint():
                 }), 400
 
             logger.info(f"🔄 重新生成图片: task={task_id}, page={page.get('index')}")
-            image_service = get_image_service()
+            user_id = get_current_user_id()
+            image_service = get_image_service(user_id=user_id)
             result = image_service.regenerate_image(
                 task_id, page, use_reference,
                 full_outline=full_outline,
@@ -332,6 +341,7 @@ def create_image_blueprint():
     # ==================== 任务状态 ====================
 
     @image_bp.route('/task/<task_id>', methods=['GET'])
+    @jwt_required
     def get_task_state(task_id):
         """
         获取任务状态
@@ -347,7 +357,8 @@ def create_image_blueprint():
           - has_cover: 是否有封面图
         """
         try:
-            image_service = get_image_service()
+            user_id = get_current_user_id()
+            image_service = get_image_service(user_id=user_id)
             state = image_service.get_task_state(task_id)
 
             if state is None:

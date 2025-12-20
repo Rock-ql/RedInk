@@ -8,11 +8,38 @@ import json
 db = SQLAlchemy()
 
 
+class User(db.Model):
+    """用户表"""
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_login_at = db.Column(db.DateTime, nullable=True)
+
+    # 关联关系
+    history_records = db.relationship('HistoryRecord', backref='user', lazy='dynamic')
+    provider_configs = db.relationship('ProviderConfig', backref='user', lazy='dynamic')
+
+    def to_dict(self):
+        """转换为字典（不包含敏感信息）"""
+        return {
+            'id': self.id,
+            'username': self.username,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_login_at': self.last_login_at.isoformat() if self.last_login_at else None
+        }
+
+
 class HistoryRecord(db.Model):
     """历史记录表"""
     __tablename__ = 'history_records'
 
     id = db.Column(db.String(36), primary_key=True)  # UUID
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)  # 用户关联
     title = db.Column(db.String(500), nullable=False, index=True)
     status = db.Column(db.String(20), nullable=False, default='draft')  # draft/generating/completed/partial
     thumbnail = db.Column(db.String(255), nullable=True)  # 缩略图文件名
@@ -103,6 +130,7 @@ class ProviderConfig(db.Model):
     __tablename__ = 'provider_configs'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)  # 用户关联
     category = db.Column(db.String(20), nullable=False)  # 'text' 或 'image'
     name = db.Column(db.String(100), nullable=False)  # 服务商名称
     provider_type = db.Column(db.String(50), nullable=False)  # google_genai/openai_compatible/image_api/google_gemini
@@ -115,7 +143,7 @@ class ProviderConfig(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
-        db.UniqueConstraint('category', 'name', name='uix_category_name'),
+        db.UniqueConstraint('user_id', 'category', 'name', name='uix_user_category_name'),
     )
 
     def to_dict(self, mask_key=True):

@@ -9,9 +9,11 @@
 
 import logging
 import json
+from typing import Optional
 from flask import Blueprint, request, jsonify
 from backend.models import db, ProviderConfig
 from backend.config import Config
+from backend.utils.auth import jwt_required, get_current_user_id
 from .utils import prepare_providers_for_response
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ def create_config_blueprint():
     # ==================== 配置读写 ====================
 
     @config_bp.route('/config', methods=['GET'])
+    @jwt_required
     def get_config():
         """
         获取当前配置
@@ -35,11 +38,13 @@ def create_config_blueprint():
           - image_generation: 图片生成配置
         """
         try:
+            user_id = get_current_user_id()
+
             # 从数据库读取图片生成配置
-            image_config = _get_config_from_db('image')
+            image_config = _get_config_from_db('image', user_id=user_id)
 
             # 从数据库读取文本生成配置
-            text_config = _get_config_from_db('text')
+            text_config = _get_config_from_db('text', user_id=user_id)
 
             return jsonify({
                 "success": True,
@@ -67,6 +72,7 @@ def create_config_blueprint():
             }), 500
 
     @config_bp.route('/config', methods=['POST'])
+    @jwt_required
     def update_config():
         """
         更新配置
@@ -81,14 +87,15 @@ def create_config_blueprint():
         """
         try:
             data = request.get_json()
+            user_id = get_current_user_id()
 
             # 更新图片生成配置
             if 'image_generation' in data:
-                _update_provider_config_in_db('image', data['image_generation'])
+                _update_provider_config_in_db('image', data['image_generation'], user_id=user_id)
 
             # 更新文本生成配置
             if 'text_generation' in data:
-                _update_provider_config_in_db('text', data['text_generation'])
+                _update_provider_config_in_db('text', data['text_generation'], user_id=user_id)
 
             # 清除配置缓存
             _clear_config_cache()
@@ -108,6 +115,7 @@ def create_config_blueprint():
     # ==================== 连接测试 ====================
 
     @config_bp.route('/config/test', methods=['POST'])
+    @jwt_required
     def test_connection():
         """
         测试服务商连接
@@ -127,6 +135,7 @@ def create_config_blueprint():
             data = request.get_json()
             provider_type = data.get('type')
             provider_name = data.get('provider_name')
+            user_id = get_current_user_id()
 
             if not provider_type:
                 return jsonify({"success": False, "error": "缺少 type 参数"}), 400
@@ -140,7 +149,7 @@ def create_config_blueprint():
 
             # 如果没有提供 api_key，从数据库读取
             if not config['api_key'] and provider_name:
-                config = _load_provider_config_from_db(provider_type, provider_name, config)
+                config = _load_provider_config_from_db(provider_type, provider_name, config, user_id=user_id)
 
             if not config['api_key']:
                 return jsonify({"success": False, "error": "API Key 未配置"}), 400
@@ -157,17 +166,22 @@ def create_config_blueprint():
 
 # ==================== 数据库辅助函数 ====================
 
-def _get_config_from_db(category: str) -> dict:
+def _get_config_from_db(category: str, user_id: Optional[int] = None) -> dict:
     """
     从数据库获取配置
 
     Args:
         category: 配置类别 ('text' 或 'image')
+        user_id: 用户ID（用于过滤用户数据）
 
     Returns:
         配置字典
     """
-    providers = ProviderConfig.query.filter_by(category=category).all()
+    query = ProviderConfig.query.filter_by(category=category)
+    if user_id is not None:
+        query = query.filter_by(user_id=user_id)
+
+    providers = query.all()
 
     if not providers:
         return {
@@ -206,22 +220,30 @@ def _get_config_from_db(category: str) -> dict:
     return result
 
 
-def _update_provider_config_in_db(category: str, new_data: dict):
+def _update_provider_config_in_db(category: str, new_data: dict, user_id: Optional[int] = None):
     """
     更新数据库中的服务商配置
 
     Args:
         category: 配置类别 ('text' 或 'image')
         new_data: 新的配置数据
+        user_id: 用户ID（用于过滤用户数据）
     """
     # 更新 active_provider
     new_active = new_data.get('active_provider', '')
 
     # 先将所有服务商设为非激活
     if new_active:
-        ProviderConfig.query.filter_by(category=category).update({'is_active': False})
+        query = ProviderConfig.query.filter_by(category=category)
+        if user_id is not None:
+            query = query.filter_by(user_id=user_id)
+        query.update({'is_active': False})
+
         # 激活指定的服务商
-        ProviderConfig.query.filter_by(category=category, name=new_active).update({'is_active': True})
+        activate_query = ProviderConfig.query.filter_by(category=category, name=new_active)
+        if user_id is not None:
+            activate_query = activate_query.filter_by(user_id=user_id)
+        activate_query.update({'is_active': True})
 
     # 更新 providers
     if 'providers' in new_data:
@@ -229,7 +251,10 @@ def _update_provider_config_in_db(category: str, new_data: dict):
 
         for name, provider_config in new_providers.items():
             # 查找现有记录
-            existing = ProviderConfig.query.filter_by(category=category, name=name).first()
+            existing_query = ProviderConfig.query.filter_by(category=category, name=name)
+            if user_id is not None:
+                existing_query = existing_query.filter_by(user_id=user_id)
+            existing = existing_query.first()
 
             # 处理 API Key：如果是空值，保留原有的
             api_key = provider_config.get('api_key')
@@ -269,21 +294,25 @@ def _update_provider_config_in_db(category: str, new_data: dict):
                     base_url=base_url,
                     model=model,
                     is_active=is_active,
+                    user_id=user_id,
                     extra_config=json.dumps(extra) if extra else None
                 )
                 db.session.add(new_provider)
 
         # 删除不在新配置中的服务商
         existing_names = set(new_providers.keys())
-        ProviderConfig.query.filter(
+        delete_query = ProviderConfig.query.filter(
             ProviderConfig.category == category,
             ~ProviderConfig.name.in_(existing_names)
-        ).delete(synchronize_session=False)
+        )
+        if user_id is not None:
+            delete_query = delete_query.filter(ProviderConfig.user_id == user_id)
+        delete_query.delete(synchronize_session=False)
 
     db.session.commit()
 
 
-def _load_provider_config_from_db(provider_type: str, provider_name: str, config: dict) -> dict:
+def _load_provider_config_from_db(provider_type: str, provider_name: str, config: dict, user_id: Optional[int] = None) -> dict:
     """
     从数据库加载服务商配置
 
@@ -291,6 +320,7 @@ def _load_provider_config_from_db(provider_type: str, provider_name: str, config
         provider_type: 服务商类型
         provider_name: 服务商名称
         config: 当前配置（会被合并）
+        user_id: 用户ID（用于过滤用户数据）
 
     Returns:
         合并后的配置
@@ -301,7 +331,10 @@ def _load_provider_config_from_db(provider_type: str, provider_name: str, config
     else:
         category = 'image'
 
-    provider = ProviderConfig.query.filter_by(category=category, name=provider_name).first()
+    query = ProviderConfig.query.filter_by(category=category, name=provider_name)
+    if user_id is not None:
+        query = query.filter_by(user_id=user_id)
+    provider = query.first()
 
     if provider:
         config['api_key'] = provider.api_key

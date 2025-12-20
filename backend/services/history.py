@@ -28,7 +28,8 @@ class HistoryService:
         self,
         topic: str,
         outline: Dict,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        user_id: Optional[int] = None
     ) -> str:
         """
         创建历史记录
@@ -37,6 +38,7 @@ class HistoryService:
             topic: 主题标题
             outline: 大纲数据 {'raw': str, 'pages': [...]}
             task_id: 任务ID（可选）
+            user_id: 用户ID（可选）
 
         Returns:
             新创建的记录ID
@@ -50,6 +52,7 @@ class HistoryService:
             title=topic,
             status='draft',
             task_id=task_id,
+            user_id=user_id,
             outline_text=outline.get('raw', ''),
             created_at=now,
             updated_at=now
@@ -77,18 +80,22 @@ class HistoryService:
 
         return record_id
 
-    def get_record(self, record_id: str) -> Optional[Dict]:
+    def get_record(self, record_id: str, user_id: Optional[int] = None) -> Optional[Dict]:
         """
         获取单条历史记录详情
 
         Args:
             record_id: 记录ID
+            user_id: 用户ID（可选，用于权限验证）
 
         Returns:
-            记录详情字典，不存在则返回 None
+            记录详情字典，不存在或无权限则返回 None
         """
         record = HistoryRecord.query.get(record_id)
         if not record:
+            return None
+        # 验证用户权限
+        if user_id is not None and record.user_id != user_id:
             return None
         return record.to_full_dict()
 
@@ -98,7 +105,8 @@ class HistoryService:
         outline: Optional[Dict] = None,
         images: Optional[Dict] = None,
         status: Optional[str] = None,
-        thumbnail: Optional[str] = None
+        thumbnail: Optional[str] = None,
+        user_id: Optional[int] = None
     ) -> bool:
         """
         更新历史记录
@@ -109,12 +117,17 @@ class HistoryService:
             images: 图片数据（可选）
             status: 状态（可选）
             thumbnail: 缩略图（可选）
+            user_id: 用户ID（可选，用于权限验证）
 
         Returns:
             是否更新成功
         """
         record = HistoryRecord.query.get(record_id)
         if not record:
+            return False
+
+        # 验证用户权限
+        if user_id is not None and record.user_id != user_id:
             return False
 
         try:
@@ -167,18 +180,23 @@ class HistoryService:
             logger.error(f"❌ 更新历史记录失败: {e}")
             return False
 
-    def delete_record(self, record_id: str) -> bool:
+    def delete_record(self, record_id: str, user_id: Optional[int] = None) -> bool:
         """
         删除历史记录
 
         Args:
             record_id: 记录ID
+            user_id: 用户ID（可选，用于权限验证）
 
         Returns:
             是否删除成功
         """
         record = HistoryRecord.query.get(record_id)
         if not record:
+            return False
+
+        # 验证用户权限
+        if user_id is not None and record.user_id != user_id:
             return False
 
         # 删除任务图片目录
@@ -206,7 +224,8 @@ class HistoryService:
         self,
         page: int = 1,
         page_size: int = 20,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        user_id: Optional[int] = None
     ) -> Dict:
         """
         获取历史记录列表（分页）
@@ -215,11 +234,16 @@ class HistoryService:
             page: 页码（从1开始）
             page_size: 每页数量
             status: 状态过滤（可选）
+            user_id: 用户ID（可选，用于过滤用户数据）
 
         Returns:
             分页结果
         """
         query = HistoryRecord.query
+
+        # 按用户过滤
+        if user_id is not None:
+            query = query.filter_by(user_id=user_id)
 
         if status:
             query = query.filter_by(status=status)
@@ -241,37 +265,58 @@ class HistoryService:
             "total_pages": (total + page_size - 1) // page_size
         }
 
-    def search_records(self, keyword: str) -> List[Dict]:
+    def search_records(self, keyword: str, user_id: Optional[int] = None) -> List[Dict]:
         """
         搜索历史记录
 
         Args:
             keyword: 搜索关键词
+            user_id: 用户ID（可选，用于过滤用户数据）
 
         Returns:
             匹配的记录列表
         """
-        records = HistoryRecord.query.filter(
+        query = HistoryRecord.query.filter(
             HistoryRecord.title.ilike(f'%{keyword}%')
-        ).order_by(HistoryRecord.created_at.desc()).all()
+        )
+
+        # 按用户过滤
+        if user_id is not None:
+            query = query.filter_by(user_id=user_id)
+
+        records = query.order_by(HistoryRecord.created_at.desc()).all()
 
         return [r.to_index_dict() for r in records]
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self, user_id: Optional[int] = None) -> Dict:
         """
         获取统计信息
+
+        Args:
+            user_id: 用户ID（可选，用于过滤用户数据）
 
         Returns:
             统计数据
         """
-        total = HistoryRecord.query.count()
+        query = HistoryRecord.query
+
+        # 按用户过滤
+        if user_id is not None:
+            query = query.filter_by(user_id=user_id)
+
+        total = query.count()
 
         # 按状态分组统计
         from sqlalchemy import func
-        status_counts = db.session.query(
+        base_query = db.session.query(
             HistoryRecord.status,
             func.count(HistoryRecord.id)
-        ).group_by(HistoryRecord.status).all()
+        )
+
+        if user_id is not None:
+            base_query = base_query.filter(HistoryRecord.user_id == user_id)
+
+        status_counts = base_query.group_by(HistoryRecord.status).all()
 
         status_count = {status: count for status, count in status_counts}
 

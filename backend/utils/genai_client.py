@@ -169,7 +169,9 @@ class GenAIClient:
         ):
             if not chunk.candidates or not chunk.candidates[0].content or not chunk.candidates[0].content.parts:
                 continue
-            result += chunk.text
+            # chunk.text 可能为 None，需要检查
+            if chunk.text:
+                result += chunk.text
 
         return result
 

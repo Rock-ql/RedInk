@@ -5,13 +5,75 @@ import os
 import json
 import shutil
 import logging
+import secrets
 from pathlib import Path
 from datetime import datetime
 import yaml
 
-from backend.models import db, HistoryRecord, OutlinePage, TaskImage, ProviderConfig
+from backend.models import db, HistoryRecord, OutlinePage, TaskImage, ProviderConfig, User
+from backend.utils.auth import hash_password
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_users_table():
+    """
+    确保 users 表存在
+
+    使用原生 SQL 检查和创建，避免 ORM 模型与数据库不一致的问题
+    """
+    from sqlalchemy import text, inspect
+
+    inspector = inspect(db.engine)
+    tables = inspector.get_table_names()
+
+    if 'users' not in tables:
+        logger.info("📋 创建 users 表...")
+        db.session.execute(text("""
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username VARCHAR(50) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                is_active BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_login_at DATETIME
+            )
+        """))
+        db.session.commit()
+        logger.info("✅ users 表创建完成")
+
+
+def ensure_user_id_columns():
+    """
+    确保 history_records 和 provider_configs 表有 user_id 列
+
+    使用原生 SQL 进行 schema 迁移，避免 ORM 查询失败
+    """
+    from sqlalchemy import text, inspect
+
+    inspector = inspect(db.engine)
+
+    # 检查 history_records 表
+    if 'history_records' in inspector.get_table_names():
+        columns = [col['name'] for col in inspector.get_columns('history_records')]
+        if 'user_id' not in columns:
+            logger.info("📋 为 history_records 表添加 user_id 列...")
+            db.session.execute(text(
+                "ALTER TABLE history_records ADD COLUMN user_id INTEGER REFERENCES users(id)"
+            ))
+            db.session.commit()
+            logger.info("✅ history_records.user_id 列添加完成")
+
+    # 检查 provider_configs 表
+    if 'provider_configs' in inspector.get_table_names():
+        columns = [col['name'] for col in inspector.get_columns('provider_configs')]
+        if 'user_id' not in columns:
+            logger.info("📋 为 provider_configs 表添加 user_id 列...")
+            db.session.execute(text(
+                "ALTER TABLE provider_configs ADD COLUMN user_id INTEGER REFERENCES users(id)"
+            ))
+            db.session.commit()
+            logger.info("✅ provider_configs.user_id 列添加完成")
 
 
 def get_project_root() -> Path:
@@ -246,6 +308,68 @@ def migrate_provider_configs():
     return migrated_count
 
 
+def get_or_create_default_user() -> int:
+    """
+    获取或创建默认用户
+
+    Returns:
+        默认用户的 ID
+    """
+    default_username = 'default'
+
+    # 检查是否已存在
+    user = User.query.filter_by(username=default_username).first()
+    if user:
+        return user.id
+
+    # 创建默认用户（使用随机密码，仅用于数据关联）
+    random_password = secrets.token_urlsafe(32)
+    user = User(
+        username=default_username,
+        password_hash=hash_password(random_password),
+        is_active=True,
+        created_at=datetime.utcnow()
+    )
+    db.session.add(user)
+    db.session.commit()
+
+    logger.info(f"✅ 已创建默认用户: {default_username}")
+    return user.id
+
+
+def migrate_orphan_records():
+    """
+    将没有 user_id 的记录关联到默认用户
+
+    Returns:
+        迁移的记录数
+    """
+    # 检查是否有孤儿记录
+    orphan_history = HistoryRecord.query.filter_by(user_id=None).count()
+    orphan_config = ProviderConfig.query.filter_by(user_id=None).count()
+
+    if orphan_history == 0 and orphan_config == 0:
+        logger.info("📊 没有需要关联用户的孤儿记录")
+        return 0
+
+    # 获取或创建默认用户
+    default_user_id = get_or_create_default_user()
+
+    # 更新 HistoryRecord
+    if orphan_history > 0:
+        HistoryRecord.query.filter_by(user_id=None).update({'user_id': default_user_id})
+        logger.info(f"✅ 已将 {orphan_history} 条历史记录关联到默认用户")
+
+    # 更新 ProviderConfig
+    if orphan_config > 0:
+        ProviderConfig.query.filter_by(user_id=None).update({'user_id': default_user_id})
+        logger.info(f"✅ 已将 {orphan_config} 条配置关联到默认用户")
+
+    db.session.commit()
+
+    return orphan_history + orphan_config
+
+
 def check_and_migrate():
     """
     检查并执行迁移
@@ -253,6 +377,11 @@ def check_and_migrate():
     Returns:
         bool: 是否执行了迁移
     """
+    # 首先确保数据库 schema 是最新的
+    # 这必须在任何 ORM 查询之前执行
+    ensure_users_table()
+    ensure_user_id_columns()
+
     project_root = get_project_root()
 
     # 检查是否存在旧数据文件
@@ -263,16 +392,23 @@ def check_and_migrate():
     )
 
     if not has_old_data:
-        logger.info("📁 没有发现旧数据文件，无需迁移")
-        return False
+        # 即使没有旧数据，也要检查是否有孤儿记录需要关联
+        orphan_migrated = migrate_orphan_records()
+        if orphan_migrated > 0:
+            logger.info(f"✅ 已将 {orphan_migrated} 条记录关联到默认用户")
+        else:
+            logger.info("📁 没有发现旧数据文件，无需迁移")
+        return orphan_migrated > 0
 
     # 检查数据库是否为空
     history_count = HistoryRecord.query.count()
     config_count = ProviderConfig.query.count()
 
     if history_count > 0 or config_count > 0:
-        logger.info(f"📊 数据库已有数据 (历史记录: {history_count}, 配置: {config_count})，跳过迁移")
-        return False
+        logger.info(f"📊 数据库已有数据 (历史记录: {history_count}, 配置: {config_count})，跳过文件迁移")
+        # 即便跳过文件迁移，也要检查是否有孤儿记录
+        orphan_migrated = migrate_orphan_records()
+        return orphan_migrated > 0
 
     logger.info("🚀 开始执行数据迁移...")
 
@@ -284,6 +420,12 @@ def check_and_migrate():
     config_migrated = migrate_provider_configs()
 
     logger.info(f"✅ 迁移完成: 历史记录 {history_migrated} 条, 配置 {config_migrated} 条")
+
+    # 将孤儿记录关联到默认用户
+    orphan_migrated = migrate_orphan_records()
+    if orphan_migrated > 0:
+        logger.info(f"✅ 已将 {orphan_migrated} 条记录关联到默认用户")
+
     return True
 
 

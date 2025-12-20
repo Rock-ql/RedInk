@@ -10,6 +10,7 @@ import base64
 import logging
 from flask import Blueprint, request, jsonify
 from backend.services.outline import get_outline_service
+from backend.utils.auth import jwt_required, get_current_user_id
 from .utils import log_request, log_error
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ def create_outline_blueprint():
     outline_bp = Blueprint('outline', __name__)
 
     @outline_bp.route('/outline', methods=['POST'])
+    @jwt_required
     def generate_outline():
         """
         生成大纲（支持图片上传）
@@ -56,7 +58,8 @@ def create_outline_blueprint():
 
             # 调用大纲生成服务
             logger.info(f"🔄 开始生成大纲，主题: {topic[:50]}...")
-            outline_service = get_outline_service()
+            user_id = get_current_user_id()
+            outline_service = get_outline_service(user_id=user_id)
             result = outline_service.generate_outline(topic, images if images else None)
 
             # 记录结果

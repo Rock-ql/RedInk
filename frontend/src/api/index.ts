@@ -2,6 +2,53 @@ import axios from 'axios'
 
 const API_BASE_URL = '/api'
 
+// ==================== Axios 拦截器配置 ====================
+
+// 请求拦截器：自动添加 Authorization header
+axios.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  (error) => {
+    return Promise.reject(error)
+  }
+)
+
+// 响应拦截器：处理 401 错误
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token 无效或过期，清除登录状态并跳转登录页
+      localStorage.removeItem('token')
+
+      // 避免在登录页面重复跳转
+      if (!window.location.pathname.includes('/login')) {
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
+// 获取带 Authorization header 的 fetch headers
+function getAuthHeaders(): HeadersInit {
+  const token = localStorage.getItem('token')
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json'
+  }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
+}
+
+// ==================== 类型定义 ====================
+
 export interface Page {
   index: number
   type: 'cover' | 'content' | 'summary'
@@ -102,9 +149,7 @@ export async function retryFailedImages(
   try {
     const response = await fetch(`${API_BASE_URL}/retry-failed`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         task_id: taskId,
         pages
@@ -317,9 +362,7 @@ export async function generateImagesPost(
 
     const response = await fetch(`${API_BASE_URL}/generate`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         pages,
         task_id: taskId,
