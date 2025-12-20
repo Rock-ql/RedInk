@@ -1,5 +1,5 @@
 """
-配置管理相关 API 路由
+配置管理相关 API 路由 - SQLAlchemy 实现
 
 包含功能：
 - 获取当前配置
@@ -8,17 +8,13 @@
 """
 
 import logging
-from pathlib import Path
-import yaml
+import json
 from flask import Blueprint, request, jsonify
+from backend.models import db, ProviderConfig
+from backend.config import Config
 from .utils import prepare_providers_for_response
 
 logger = logging.getLogger(__name__)
-
-# 配置文件路径
-CONFIG_DIR = Path(__file__).parent.parent.parent
-IMAGE_CONFIG_PATH = CONFIG_DIR / 'image_providers.yaml'
-TEXT_CONFIG_PATH = CONFIG_DIR / 'text_providers.yaml'
 
 
 def create_config_blueprint():
@@ -39,17 +35,11 @@ def create_config_blueprint():
           - image_generation: 图片生成配置
         """
         try:
-            # 读取图片生成配置
-            image_config = _read_config(IMAGE_CONFIG_PATH, {
-                'active_provider': 'google_genai',
-                'providers': {}
-            })
+            # 从数据库读取图片生成配置
+            image_config = _get_config_from_db('image')
 
-            # 读取文本生成配置
-            text_config = _read_config(TEXT_CONFIG_PATH, {
-                'active_provider': 'google_gemini',
-                'providers': {}
-            })
+            # 从数据库读取文本生成配置
+            text_config = _get_config_from_db('text')
 
             return jsonify({
                 "success": True,
@@ -70,6 +60,7 @@ def create_config_blueprint():
             })
 
         except Exception as e:
+            logger.error(f"获取配置失败: {e}")
             return jsonify({
                 "success": False,
                 "error": f"获取配置失败: {str(e)}"
@@ -93,19 +84,13 @@ def create_config_blueprint():
 
             # 更新图片生成配置
             if 'image_generation' in data:
-                _update_provider_config(
-                    IMAGE_CONFIG_PATH,
-                    data['image_generation']
-                )
+                _update_provider_config_in_db('image', data['image_generation'])
 
             # 更新文本生成配置
             if 'text_generation' in data:
-                _update_provider_config(
-                    TEXT_CONFIG_PATH,
-                    data['text_generation']
-                )
+                _update_provider_config_in_db('text', data['text_generation'])
 
-            # 清除配置缓存，确保下次使用时读取新配置
+            # 清除配置缓存
             _clear_config_cache()
 
             return jsonify({
@@ -114,6 +99,7 @@ def create_config_blueprint():
             })
 
         except Exception as e:
+            logger.error(f"更新配置失败: {e}")
             return jsonify({
                 "success": False,
                 "error": f"更新配置失败: {str(e)}"
@@ -152,9 +138,9 @@ def create_config_blueprint():
                 'model': data.get('model')
             }
 
-            # 如果没有提供 api_key，从配置文件读取
+            # 如果没有提供 api_key，从数据库读取
             if not config['api_key'] and provider_name:
-                config = _load_provider_config(provider_type, provider_name, config)
+                config = _load_provider_config_from_db(provider_type, provider_name, config)
 
             if not config['api_key']:
                 return jsonify({"success": False, "error": "API Key 未配置"}), 400
@@ -169,65 +155,169 @@ def create_config_blueprint():
     return config_bp
 
 
-# ==================== 辅助函数 ====================
+# ==================== 数据库辅助函数 ====================
 
-def _read_config(path: Path, default: dict) -> dict:
-    """读取配置文件"""
-    if path.exists():
-        with open(path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f) or default
-    return default
-
-
-def _write_config(path: Path, config: dict):
-    """写入配置文件"""
-    with open(path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
-
-
-def _update_provider_config(config_path: Path, new_data: dict):
+def _get_config_from_db(category: str) -> dict:
     """
-    更新服务商配置
+    从数据库获取配置
 
     Args:
-        config_path: 配置文件路径
+        category: 配置类别 ('text' 或 'image')
+
+    Returns:
+        配置字典
+    """
+    providers = ProviderConfig.query.filter_by(category=category).all()
+
+    if not providers:
+        return {
+            'active_provider': '',
+            'providers': {}
+        }
+
+    result = {
+        'active_provider': '',
+        'providers': {}
+    }
+
+    for p in providers:
+        if p.is_active:
+            result['active_provider'] = p.name
+
+        # 解析额外配置
+        extra = json.loads(p.extra_config) if p.extra_config else {}
+
+        # 构建服务商配置
+        provider_config = {
+            'type': p.provider_type,
+            'api_key': p.api_key or '',
+            'model': p.model,
+            **extra
+        }
+
+        if p.base_url:
+            provider_config['base_url'] = p.base_url
+
+        # 移除空值
+        provider_config = {k: v for k, v in provider_config.items() if v is not None}
+
+        result['providers'][p.name] = provider_config
+
+    return result
+
+
+def _update_provider_config_in_db(category: str, new_data: dict):
+    """
+    更新数据库中的服务商配置
+
+    Args:
+        category: 配置类别 ('text' 或 'image')
         new_data: 新的配置数据
     """
-    # 读取现有配置
-    existing_config = _read_config(config_path, {'providers': {}})
-
     # 更新 active_provider
-    if 'active_provider' in new_data:
-        existing_config['active_provider'] = new_data['active_provider']
+    new_active = new_data.get('active_provider', '')
+
+    # 先将所有服务商设为非激活
+    if new_active:
+        ProviderConfig.query.filter_by(category=category).update({'is_active': False})
+        # 激活指定的服务商
+        ProviderConfig.query.filter_by(category=category, name=new_active).update({'is_active': True})
 
     # 更新 providers
     if 'providers' in new_data:
-        existing_providers = existing_config.get('providers', {})
         new_providers = new_data['providers']
 
-        for name, new_provider_config in new_providers.items():
-            # 如果新配置的 api_key 是空的，保留原有的
-            if new_provider_config.get('api_key') in [True, False, '', None]:
-                if name in existing_providers and existing_providers[name].get('api_key'):
-                    new_provider_config['api_key'] = existing_providers[name]['api_key']
+        for name, provider_config in new_providers.items():
+            # 查找现有记录
+            existing = ProviderConfig.query.filter_by(category=category, name=name).first()
+
+            # 处理 API Key：如果是空值，保留原有的
+            api_key = provider_config.get('api_key')
+            if api_key in [True, False, '', None]:
+                if existing and existing.api_key:
+                    api_key = existing.api_key
                 else:
-                    new_provider_config.pop('api_key', None)
+                    api_key = ''
 
-            # 移除不需要保存的字段
-            new_provider_config.pop('api_key_env', None)
-            new_provider_config.pop('api_key_masked', None)
+            # 提取核心字段，其余放入 extra_config
+            provider_type = provider_config.get('type', '')
+            base_url = provider_config.get('base_url')
+            model = provider_config.get('model')
 
-        existing_config['providers'] = new_providers
+            # 额外配置字段
+            extra_fields = ['high_concurrency', 'short_prompt', 'default_aspect_ratio',
+                           'temperature', 'max_output_tokens', 'image_size', 'endpoint_type']
+            extra = {k: provider_config[k] for k in extra_fields if k in provider_config}
 
-    # 保存配置
-    _write_config(config_path, existing_config)
+            is_active = (name == new_active)
+
+            if existing:
+                # 更新现有记录
+                existing.provider_type = provider_type
+                existing.api_key = api_key
+                existing.base_url = base_url
+                existing.model = model
+                existing.is_active = is_active
+                existing.extra_config = json.dumps(extra) if extra else None
+            else:
+                # 创建新记录
+                new_provider = ProviderConfig(
+                    category=category,
+                    name=name,
+                    provider_type=provider_type,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    is_active=is_active,
+                    extra_config=json.dumps(extra) if extra else None
+                )
+                db.session.add(new_provider)
+
+        # 删除不在新配置中的服务商
+        existing_names = set(new_providers.keys())
+        ProviderConfig.query.filter(
+            ProviderConfig.category == category,
+            ~ProviderConfig.name.in_(existing_names)
+        ).delete(synchronize_session=False)
+
+    db.session.commit()
+
+
+def _load_provider_config_from_db(provider_type: str, provider_name: str, config: dict) -> dict:
+    """
+    从数据库加载服务商配置
+
+    Args:
+        provider_type: 服务商类型
+        provider_name: 服务商名称
+        config: 当前配置（会被合并）
+
+    Returns:
+        合并后的配置
+    """
+    # 确定配置类别
+    if provider_type in ['openai_compatible', 'google_gemini']:
+        category = 'text'
+    else:
+        category = 'image'
+
+    provider = ProviderConfig.query.filter_by(category=category, name=provider_name).first()
+
+    if provider:
+        config['api_key'] = provider.api_key
+
+        if not config.get('base_url'):
+            config['base_url'] = provider.base_url
+        if not config.get('model'):
+            config['model'] = provider.model
+
+    return config
 
 
 def _clear_config_cache():
     """清除配置缓存"""
     try:
-        from backend.config import Config
-        Config._image_providers_config = None
+        Config.reload_config()
     except Exception:
         pass
 
@@ -238,40 +328,7 @@ def _clear_config_cache():
         pass
 
 
-def _load_provider_config(provider_type: str, provider_name: str, config: dict) -> dict:
-    """
-    从配置文件加载服务商配置
-
-    Args:
-        provider_type: 服务商类型
-        provider_name: 服务商名称
-        config: 当前配置（会被合并）
-
-    Returns:
-        dict: 合并后的配置
-    """
-    # 确定配置文件路径
-    if provider_type in ['openai_compatible', 'google_gemini']:
-        config_path = TEXT_CONFIG_PATH
-    else:
-        config_path = IMAGE_CONFIG_PATH
-
-    if config_path.exists():
-        with open(config_path, 'r', encoding='utf-8') as f:
-            yaml_config = yaml.safe_load(f) or {}
-            providers = yaml_config.get('providers', {})
-
-            if provider_name in providers:
-                saved = providers[provider_name]
-                config['api_key'] = saved.get('api_key')
-
-                if not config['base_url']:
-                    config['base_url'] = saved.get('base_url')
-                if not config['model']:
-                    config['model'] = saved.get('model')
-
-    return config
-
+# ==================== 连接测试函数 ====================
 
 def _test_provider_connection(provider_type: str, config: dict) -> dict:
     """
@@ -282,7 +339,7 @@ def _test_provider_connection(provider_type: str, config: dict) -> dict:
         config: 服务商配置
 
     Returns:
-        dict: 测试结果
+        测试结果
     """
     test_prompt = "请回复'你好，红墨'"
 
@@ -315,7 +372,6 @@ def _test_google_genai(config: dict) -> dict:
             },
             vertexai=False
         )
-        # 测试列出模型
         try:
             list(client.models.list())
             return {

@@ -5,6 +5,7 @@ from flask import Flask, send_from_directory
 from flask_cors import CORS
 from backend.config import Config
 from backend.routes import register_routes
+from backend.database import init_db
 
 
 def setup_logging():
@@ -55,6 +56,14 @@ def create_app():
 
     app.config.from_object(Config)
 
+    # 初始化数据库
+    init_db(app)
+
+    # 执行数据迁移（如果需要）
+    with app.app_context():
+        from backend.migrations import check_and_migrate
+        check_and_migrate()
+
     CORS(app, resources={
         r"/api/*": {
             "origins": Config.CORS_ORIGINS,
@@ -66,8 +75,9 @@ def create_app():
     # 注册所有 API 路由
     register_routes(app)
 
-    # 启动时验证配置
-    _validate_config_on_startup(logger)
+    # 启动时验证配置（需要在应用上下文中执行）
+    with app.app_context():
+        _validate_config_on_startup(logger)
 
     # 根据是否有前端构建产物决定根路由行为
     if frontend_dist.exists():
@@ -97,55 +107,44 @@ def create_app():
 
 
 def _validate_config_on_startup(logger):
-    """启动时验证配置"""
-    from pathlib import Path
-    import yaml
+    """启动时验证配置（从数据库读取）"""
+    from backend.models import ProviderConfig
 
-    logger.info("📋 检查配置文件...")
+    logger.info("📋 检查服务商配置...")
 
-    # 检查 text_providers.yaml
-    text_config_path = Path(__file__).parent.parent / 'text_providers.yaml'
-    if text_config_path.exists():
-        try:
-            with open(text_config_path, 'r', encoding='utf-8') as f:
-                text_config = yaml.safe_load(f) or {}
-            active = text_config.get('active_provider', '未设置')
-            providers = list(text_config.get('providers', {}).keys())
-            logger.info(f"✅ 文本生成配置: 激活={active}, 可用服务商={providers}")
+    # 检查文本服务商配置
+    text_providers = ProviderConfig.query.filter_by(category='text').all()
+    active_text = ProviderConfig.query.filter_by(category='text', is_active=True).first()
 
-            # 检查激活的服务商是否有 API Key
-            if active in text_config.get('providers', {}):
-                provider = text_config['providers'][active]
-                if not provider.get('api_key'):
-                    logger.warning(f"⚠️  文本服务商 [{active}] 未配置 API Key")
-                else:
-                    logger.info(f"✅ 文本服务商 [{active}] API Key 已配置")
-        except Exception as e:
-            logger.error(f"❌ 读取 text_providers.yaml 失败: {e}")
+    if text_providers:
+        provider_names = [p.name for p in text_providers]
+        active_name = active_text.name if active_text else '未设置'
+        logger.info(f"✅ 文本生成配置: 激活={active_name}, 可用服务商={provider_names}")
+
+        if active_text:
+            if not active_text.api_key:
+                logger.warning(f"⚠️  文本服务商 [{active_name}] 未配置 API Key")
+            else:
+                logger.info(f"✅ 文本服务商 [{active_name}] API Key 已配置")
     else:
-        logger.warning("⚠️  text_providers.yaml 不存在，将使用默认配置")
+        logger.warning("⚠️  未配置任何文本服务商，请在设置页面添加")
 
-    # 检查 image_providers.yaml
-    image_config_path = Path(__file__).parent.parent / 'image_providers.yaml'
-    if image_config_path.exists():
-        try:
-            with open(image_config_path, 'r', encoding='utf-8') as f:
-                image_config = yaml.safe_load(f) or {}
-            active = image_config.get('active_provider', '未设置')
-            providers = list(image_config.get('providers', {}).keys())
-            logger.info(f"✅ 图片生成配置: 激活={active}, 可用服务商={providers}")
+    # 检查图片服务商配置
+    image_providers = ProviderConfig.query.filter_by(category='image').all()
+    active_image = ProviderConfig.query.filter_by(category='image', is_active=True).first()
 
-            # 检查激活的服务商是否有 API Key
-            if active in image_config.get('providers', {}):
-                provider = image_config['providers'][active]
-                if not provider.get('api_key'):
-                    logger.warning(f"⚠️  图片服务商 [{active}] 未配置 API Key")
-                else:
-                    logger.info(f"✅ 图片服务商 [{active}] API Key 已配置")
-        except Exception as e:
-            logger.error(f"❌ 读取 image_providers.yaml 失败: {e}")
+    if image_providers:
+        provider_names = [p.name for p in image_providers]
+        active_name = active_image.name if active_image else '未设置'
+        logger.info(f"✅ 图片生成配置: 激活={active_name}, 可用服务商={provider_names}")
+
+        if active_image:
+            if not active_image.api_key:
+                logger.warning(f"⚠️  图片服务商 [{active_name}] 未配置 API Key")
+            else:
+                logger.info(f"✅ 图片服务商 [{active_name}] API Key 已配置")
     else:
-        logger.warning("⚠️  image_providers.yaml 不存在，将使用默认配置")
+        logger.warning("⚠️  未配置任何图片服务商，请在设置页面添加")
 
     logger.info("✅ 配置检查完成")
 

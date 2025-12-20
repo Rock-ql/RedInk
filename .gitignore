@@ -59,6 +59,13 @@ history/*
 /image_providers.yaml
 /text_providers.yaml
 
+# SQLite database and backups
+data/
+backup/
+
+# Bun lock file
+frontend/bun.lock
+
 # Logs
 *.log
 logs/
