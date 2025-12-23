@@ -107,6 +107,14 @@
           </div>
         </div>
 
+        <!-- 图片预览（如果已生成） -->
+        <div v-if="getImageForPage(page.index)" class="thumbnail-preview">
+          <img :src="getImageForPage(page.index)" :alt="`P${idx + 1} 预览`" />
+          <div class="thumbnail-overlay">
+            <span class="thumbnail-badge">已生成</span>
+          </div>
+        </div>
+
         <textarea
           v-model="page.content"
           class="textarea-paper"
@@ -167,6 +175,13 @@ const getPageTypeName = (type: string) => {
     summary: '总结'
   }
   return names[type as keyof typeof names] || '内容'
+}
+
+// 获取页面的已生成图片 URL
+const getImageForPage = (pageIndex: number) => {
+  if (!store.taskId) return null
+  const image = store.images.find(img => img.index === pageIndex && img.status === 'done' && img.url)
+  return image ? image.url : null
 }
 
 // 保存大纲到历史记录（防抖）
@@ -487,6 +502,46 @@ onMounted(async () => {
 }
 .icon-btn.delete-btn:hover { color: #FF4D4F; }
 .icon-btn.refresh-btn:hover { color: var(--primary); }
+
+/* 缩略图预览 */
+.thumbnail-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3/4;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+.thumbnail-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumbnail-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.3) 0%, transparent 30%);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+.thumbnail-badge {
+  background: rgba(82, 196, 26, 0.9);
+  color: white;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  backdrop-filter: blur(4px);
+}
 
 /* 文本区域 - 核心 */
 .textarea-paper {

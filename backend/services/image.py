@@ -20,7 +20,7 @@ class ImageService:
 
     # 并发配置
     MAX_CONCURRENT = 15  # 最大并发数
-    AUTO_RETRY_COUNT = 3  # 自动重试次数
+    AUTO_RETRY_COUNT = 1  # 自动重试次数
 
     def __init__(self, provider_name: str = None, user_id: Optional[int] = None):
         """

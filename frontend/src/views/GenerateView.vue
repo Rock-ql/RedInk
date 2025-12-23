@@ -294,6 +294,9 @@ onMounted(async () => {
           let status = 'completed'
           if (hasFailedImages.value) {
             status = generatedImages.length > 0 ? 'partial' : 'draft'
+          } else if (generatedImages.length < store.outline.pages.length) {
+            // 部分生成完成（没有失败，但也没有全部生成）
+            status = 'partial'
           }
 
           // 获取封面图作为缩略图（只保存文件名，不是完整URL）
@@ -313,10 +316,24 @@ onMounted(async () => {
         }
       }
 
-      // 如果没有失败的，跳转到结果页
-      if (!hasFailedImages.value) {
+      // 判断是否跳转到结果页
+      // 只有当所有页面都已生成（成功或失败），才跳转到结果页
+      const totalPages = store.outline.pages.length
+      const generatedCount = event.images.filter(img => img !== null).length
+      const allPagesProcessed = generatedCount + failedCount.value >= totalPages
+
+      if (allPagesProcessed && !hasFailedImages.value) {
+        // 全部生成成功，跳转到结果页
         setTimeout(() => {
           router.push('/result')
+        }, 1000)
+      } else if (allPagesProcessed && hasFailedImages.value) {
+        // 有失败的，停留在当前页面让用户重试
+        // 不做任何操作
+      } else {
+        // 部分生成完成，回到编辑页
+        setTimeout(() => {
+          router.push('/outline')
         }, 1000)
       }
     },
