@@ -27,10 +27,10 @@
         <div class="user-area">
           <div class="user-info">
             <div class="user-avatar">
-              {{ authStore.username.charAt(0).toUpperCase() }}
+              {{ (authStore.username || '用户').charAt(0).toUpperCase() }}
             </div>
             <div class="user-details">
-              <div class="user-name">{{ authStore.username }}</div>
+              <div class="user-name">{{ authStore.username || '用户' }}</div>
               <div class="user-role">用户</div>
             </div>
           </div>
@@ -92,8 +92,10 @@ function handleLogout() {
   router.push('/login')
 }
 
-// 启用自动保存到 localStorage
-onMounted(() => {
+// 启用自动保存到 localStorage，并初始化认证状态
+onMounted(async () => {
   setupAutoSave()
+  // 初始化认证状态，从 localStorage 恢复登录信息
+  await authStore.initAuth()
 })
 </script>
