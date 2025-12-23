@@ -4,9 +4,19 @@
       <div>
         <h1 class="page-title">生成结果</h1>
         <p class="page-subtitle">
-          <span v-if="isGenerating">正在生成第 {{ store.progress.current + 1 }} / {{ store.progress.total }} 页</span>
-          <span v-else-if="hasFailedImages">{{ failedCount }} 张图片生成失败，可点击重试</span>
-          <span v-else>全部 {{ store.progress.total }} 张图片生成完成</span>
+          <span v-if="isGenerating">
+            正在生成第 {{ store.progress.current + 1 }} / {{ store.progress.total }} 页
+            <span v-if="failedCount > 0" style="margin-left: 12px; color: #ff4d4f;">
+              (已失败 {{ failedCount }} 张)
+            </span>
+          </span>
+          <span v-else-if="hasFailedImages" style="color: #ff4d4f;">
+            {{ failedCount }} 张图片生成失败，可点击重试
+          </span>
+          <span v-else-if="store.progress.total > 0" style="color: #52c41a;">
+            ✓ 全部 {{ store.progress.total }} 张图片生成完成
+          </span>
+          <span v-else>准备开始生成...</span>
         </p>
       </div>
       <div style="display: flex; gap: 10px;">
@@ -38,10 +48,10 @@
       </div>
 
       <div class="grid-cols-4" style="margin-top: 40px;">
-        <div v-for="image in store.images" :key="image.index" class="image-card">
+        <div v-for="image in displayImages" :key="image.index" class="image-card">
           <!-- 图片展示区域 -->
           <div v-if="image.url && image.status === 'done'" class="image-preview">
-            <img :src="image.url" :alt="`第 ${image.index + 1} 页`" />
+            <img :src="image.url" :alt="`第 ${image.index + 1} 页`" @error="handleImageError(image)" />
             <!-- 重新生成按钮（悬停显示） -->
             <div class="image-overlay">
               <button
@@ -114,9 +124,14 @@ const progressPercent = computed(() => {
   return (store.progress.current / store.progress.total) * 100
 })
 
-const hasFailedImages = computed(() => store.images.some(img => img.status === 'error'))
+// 只显示正在生成或已生成的图片（过滤掉 idle 状态）
+const displayImages = computed(() =>
+  store.images.filter(img => img.status !== 'idle')
+)
 
-const failedCount = computed(() => store.images.filter(img => img.status === 'error').length)
+const hasFailedImages = computed(() => displayImages.value.some(img => img.status === 'error'))
+
+const failedCount = computed(() => displayImages.value.filter(img => img.status === 'error').length)
 
 const getStatusText = (status: string) => {
   const texts: Record<string, string> = {
@@ -126,6 +141,13 @@ const getStatusText = (status: string) => {
     retrying: '重试中'
   }
   return texts[status] || '等待中'
+}
+
+// 处理图片加载错误
+const handleImageError = (image: any) => {
+  console.error(`图片加载失败: Page ${image.index + 1}, URL: ${image.url}`)
+  // 标记为错误状态
+  store.updateProgress(image.index, 'error', undefined, '图片加载失败')
 }
 
 // 重试单张图片（异步并发执行，不阻塞）

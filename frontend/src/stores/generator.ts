@@ -4,7 +4,7 @@ import type { Page } from '../api'
 export interface GeneratedImage {
   index: number
   url: string
-  status: 'generating' | 'done' | 'error' | 'retrying'
+  status: 'generating' | 'done' | 'error' | 'retrying' | 'idle'
   error?: string
   retryable?: boolean
 }
@@ -221,12 +221,18 @@ export const useGeneratorStore = defineStore('generator', {
             status: 'generating' as const
           }
         } else {
-          // 不需要生成的页面，保留原有数据或设为空
+          // 不需要生成的页面，保留原有数据
+          // 如果已有数据且状态是 done（有 URL），则保留
+          // 否则不显示在生成页面中
           const existing = existingImages.get(page.index)
-          return existing || {
+          if (existing && existing.status === 'done' && existing.url) {
+            return existing
+          }
+          // 未生成过的页面，返回 idle 状态（不在本次生成范围内）
+          return {
             index: page.index,
             url: '',
-            status: 'done' as const  // 标记为已完成（跳过）
+            status: 'idle' as const
           }
         }
       })
