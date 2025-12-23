@@ -2,21 +2,41 @@
   <div class="container" style="max-width: 100%;">
     <div class="page-header" style="max-width: 1200px; margin: 0 auto 30px auto;">
       <div>
-        <h1 class="page-title">编辑大纲</h1>
-        <p class="page-subtitle">调整页面顺序，修改文案，打造完美内容</p>
+        <h1 class="page-title">{{ store.outlineGenerating ? '正在生成大纲...' : '编辑大纲' }}</h1>
+        <p class="page-subtitle">
+          <span v-if="store.outlineGenerating" class="generating-text">
+            AI 正在为您构思内容框架<span class="typing-cursor">|</span>
+          </span>
+          <span v-else>调整页面顺序，修改文案，打造完美内容</span>
+        </p>
       </div>
       <div style="display: flex; gap: 12px;">
         <button class="btn btn-secondary" @click="goBack" style="background: white; border: 1px solid var(--border-color);">
           上一步
         </button>
-        <button class="btn btn-primary" @click="generateAll">
+        <button class="btn btn-primary" @click="generateAll" :disabled="store.outlineGenerating || store.outline.pages.length === 0">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path><line x1="16" y1="8" x2="2" y2="22"></line><line x1="17.5" y1="15" x2="9" y2="15"></line></svg>
           一键生成全部
         </button>
       </div>
     </div>
 
-    <div class="outline-grid">
+    <!-- 生成中状态 -->
+    <div v-if="store.outlineGenerating" class="outline-grid">
+      <div class="card outline-card generating-card">
+        <div class="generating-placeholder">
+          <div class="loading-dots">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="generating-hint">正在生成下一页...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 已生成的大纲 -->
+    <div v-else class="outline-grid">
       <div
         v-for="(page, idx) in store.outline.pages"
         :key="page.index"
@@ -72,20 +92,28 @@
       </div>
     </div>
 
+    <!-- 错误提示 -->
+    <div v-if="error" class="error-toast">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+      {{ error }}
+    </div>
+
     <div style="height: 100px;"></div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGeneratorStore } from '../stores/generator'
+import { generateOutline, createHistory } from '../api'
 
 const router = useRouter()
 const store = useGeneratorStore()
 
 const dragOverIndex = ref<number | null>(null)
 const draggedIndex = ref<number | null>(null)
+const error = ref('')
 
 const getPageTypeName = (type: string) => {
   const names = {
@@ -133,6 +161,8 @@ const addPage = (type: 'cover' | 'content' | 'summary') => {
 }
 
 const goBack = () => {
+  // 如果正在生成，则停止
+  store.outlineGenerating = false
   router.back()
 }
 
@@ -147,6 +177,52 @@ const generateSingle = (pageIndex: number) => {
   store.setPagesToGenerate([pageIndex])
   router.push('/generate')
 }
+
+// 页面加载时检查是否需要生成大纲
+onMounted(async () => {
+  // 如果没有主题，返回首页
+  if (!store.topic) {
+    router.push('/')
+    return
+  }
+
+  // 如果需要生成大纲
+  if (store.outlineGenerating) {
+    error.value = ''
+
+    // 先创建草稿记录
+    try {
+      const historyResult = await createHistory(store.topic, {
+        raw: '',
+        pages: []
+      })
+      if (historyResult.success && historyResult.record_id) {
+        store.recordId = historyResult.record_id
+        console.log('创建草稿记录:', store.recordId)
+      }
+    } catch (e) {
+      console.error('创建草稿记录失败:', e)
+    }
+
+    // 开始生成大纲
+    try {
+      const result = await generateOutline(
+        store.topic,
+        store.userImages.length > 0 ? store.userImages : undefined
+      )
+
+      if (result.success && result.pages) {
+        store.setOutline(result.outline || '', result.pages)
+      } else {
+        error.value = result.error || '生成大纲失败'
+      }
+    } catch (err: any) {
+      error.value = err.message || '网络错误，请重试'
+    } finally {
+      store.outlineGenerating = false
+    }
+  }
+})
 </script>
 
 <style scoped>
@@ -338,5 +414,94 @@ const generateSingle = (pageIndex: number) => {
   font-size: 32px;
   font-weight: 300;
   margin-bottom: 8px;
+}
+
+/* 生成中状态 */
+.generating-text {
+  color: var(--primary);
+}
+
+.typing-cursor {
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.generating-card {
+  background: linear-gradient(135deg, rgba(255, 77, 79, 0.05) 0%, rgba(255, 77, 79, 0.02) 100%);
+  border: 2px dashed rgba(255, 77, 79, 0.2);
+}
+
+.generating-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 300px;
+  gap: 16px;
+}
+
+.loading-dots {
+  display: flex;
+  gap: 8px;
+}
+
+.loading-dots span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.loading-dots span:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.loading-dots span:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes bounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.generating-hint {
+  color: #999;
+  font-size: 14px;
+}
+
+/* 错误提示 */
+.error-toast {
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #FF4D4F;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 50px;
+  box-shadow: 0 8px 24px rgba(255, 77, 79, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 1000;
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translate(-50%, 20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 </style>

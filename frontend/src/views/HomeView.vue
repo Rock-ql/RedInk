@@ -49,7 +49,6 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGeneratorStore } from '../stores/generator'
-import { generateOutline } from '../api'
 
 // 引入组件
 import ShowcaseBackground from '../components/home/ShowcaseBackground.vue'
@@ -75,47 +74,32 @@ function handleImagesChange(images: File[]) {
 }
 
 /**
- * 生成大纲
+ * 生成大纲 - 立即跳转到大纲页面，在那里进行生成
  */
 async function handleGenerate() {
   if (!topic.value.trim()) return
 
-  loading.value = true
-  error.value = ''
+  // 设置 store 状态
+  store.setTopic(topic.value.trim())
+  store.recordId = null
 
-  try {
-    const imageFiles = uploadedImageFiles.value
-
-    const result = await generateOutline(
-      topic.value.trim(),
-      imageFiles.length > 0 ? imageFiles : undefined
-    )
-
-    if (result.success && result.pages) {
-      store.setTopic(topic.value.trim())
-      store.setOutline(result.outline || '', result.pages)
-      store.recordId = null
-
-      // 保存用户上传的图片到 store
-      if (imageFiles.length > 0) {
-        store.userImages = imageFiles
-      } else {
-        store.userImages = []
-      }
-
-      // 清理 ComposerInput 的预览
-      composerRef.value?.clearPreviews()
-      uploadedImageFiles.value = []
-
-      router.push('/outline')
-    } else {
-      error.value = result.error || '生成大纲失败'
-    }
-  } catch (err: any) {
-    error.value = err.message || '网络错误，请重试'
-  } finally {
-    loading.value = false
+  // 保存用户上传的图片到 store
+  if (uploadedImageFiles.value.length > 0) {
+    store.userImages = uploadedImageFiles.value
+  } else {
+    store.userImages = []
   }
+
+  // 清空大纲，标记为生成中
+  store.setOutline('', [])
+  store.outlineGenerating = true
+
+  // 清理 ComposerInput 的预览
+  composerRef.value?.clearPreviews()
+  uploadedImageFiles.value = []
+
+  // 立即跳转到大纲页面
+  router.push('/outline')
 }
 </script>
 

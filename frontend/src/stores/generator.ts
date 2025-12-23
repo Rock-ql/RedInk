@@ -22,6 +22,9 @@ export interface GeneratorState {
     pages: Page[]
   }
 
+  // 大纲生成中状态
+  outlineGenerating: boolean
+
   // 生成进度
   progress: {
     current: number
@@ -89,6 +92,7 @@ export const useGeneratorStore = defineStore('generator', {
         raw: '',
         pages: []
       },
+      outlineGenerating: false,
       progress: saved.progress || {
         current: 0,
         total: 0,
@@ -300,6 +304,7 @@ export const useGeneratorStore = defineStore('generator', {
         raw: '',
         pages: []
       }
+      this.outlineGenerating = false
       this.progress = {
         current: 0,
         total: 0,
