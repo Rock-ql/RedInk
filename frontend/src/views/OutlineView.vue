@@ -106,7 +106,7 @@
 import { ref, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGeneratorStore } from '../stores/generator'
-import { generateOutline, createHistory } from '../api'
+import { generateOutline, createHistory, updateHistory } from '../api'
 
 const router = useRouter()
 const store = useGeneratorStore()
@@ -213,6 +213,22 @@ onMounted(async () => {
 
       if (result.success && result.pages) {
         store.setOutline(result.outline || '', result.pages)
+
+        // 更新历史记录，保存生成的大纲内容
+        if (store.recordId) {
+          try {
+            await updateHistory(store.recordId, {
+              outline: {
+                raw: result.outline || '',
+                pages: result.pages
+              },
+              status: 'draft'
+            })
+            console.log('大纲已保存到历史记录')
+          } catch (e) {
+            console.error('更新历史记录失败:', e)
+          }
+        }
       } else {
         error.value = result.error || '生成大纲失败'
       }
