@@ -103,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGeneratorStore } from '../stores/generator'
 import { generateOutline, createHistory, updateHistory } from '../api'
@@ -114,6 +114,8 @@ const store = useGeneratorStore()
 const dragOverIndex = ref<number | null>(null)
 const draggedIndex = ref<number | null>(null)
 const error = ref('')
+const saveTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const isSaving = ref(false)
 
 const getPageTypeName = (type: string) => {
   const names = {
@@ -123,6 +125,47 @@ const getPageTypeName = (type: string) => {
   }
   return names[type as keyof typeof names] || '内容'
 }
+
+// 保存大纲到历史记录（防抖）
+const saveOutline = async () => {
+  if (!store.recordId || store.outlineGenerating) return
+
+  isSaving.value = true
+  try {
+    await updateHistory(store.recordId, {
+      outline: {
+        raw: store.outline.raw,
+        pages: store.outline.pages
+      }
+    })
+    console.log('大纲已自动保存')
+  } catch (e) {
+    console.error('自动保存失败:', e)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// 防抖保存
+const debouncedSave = () => {
+  if (saveTimer.value) {
+    clearTimeout(saveTimer.value)
+  }
+  saveTimer.value = setTimeout(() => {
+    saveOutline()
+  }, 1000)  // 1秒防抖
+}
+
+// 监听大纲变化，自动保存
+watch(
+  () => store.outline,
+  () => {
+    if (store.recordId && !store.outlineGenerating) {
+      debouncedSave()
+    }
+  },
+  { deep: true }
+)
 
 // 拖拽逻辑
 const onDragStart = (e: DragEvent, index: number) => {
@@ -163,6 +206,11 @@ const addPage = (type: 'cover' | 'content' | 'summary') => {
 const goBack = () => {
   // 如果正在生成，则停止
   store.outlineGenerating = false
+  // 离开前保存
+  if (store.recordId && saveTimer.value) {
+    clearTimeout(saveTimer.value)
+    saveOutline()
+  }
   router.back()
 }
 
