@@ -377,7 +377,8 @@ class ImageService:
         os.makedirs(self.current_task_dir, exist_ok=True)
 
         total = len(pages)
-        generated_images = []
+        # 初始化完整数组，保持与 pages 的索引对应，未生成的位置为 None
+        generated_images = [None] * total
         failed_pages = []
         cover_image_data = None
 
@@ -433,7 +434,7 @@ class ImageService:
             )
 
             if success:
-                generated_images.append(filename)
+                generated_images[index] = filename
                 self._task_states[task_id]["generated"][index] = filename
 
                 # 读取封面图片作为参考，并立即压缩到200KB以内
@@ -524,7 +525,7 @@ class ImageService:
                             index, success, filename, error = future.result()
 
                             if success:
-                                generated_images.append(filename)
+                                generated_images[index] = filename
                                 self._task_states[task_id]["generated"][index] = filename
 
                                 yield {
@@ -604,7 +605,7 @@ class ImageService:
                     )
 
                     if success:
-                        generated_images.append(filename)
+                        generated_images[index] = filename
                         self._task_states[task_id]["generated"][index] = filename
 
                         yield {
@@ -634,9 +635,10 @@ class ImageService:
         # ==================== 完成 ====================
         # 记录批量生成完成
         elapsed_total = time.time() - start_time
+        success_count = sum(1 for img in generated_images if img is not None)
         detailed_logger.log_batch_complete(
             total=total,
-            success=len(generated_images),
+            success=success_count,
             failed=len(failed_pages),
             elapsed_time=elapsed_total
         )
@@ -648,7 +650,7 @@ class ImageService:
                 "task_id": task_id,
                 "images": generated_images,
                 "total": total,
-                "completed": len(generated_images),
+                "completed": success_count,
                 "failed": len(failed_pages),
                 "failed_indices": [p["index"] for p in failed_pages]
             }

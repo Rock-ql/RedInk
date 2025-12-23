@@ -287,25 +287,26 @@ onMounted(async () => {
       // 更新历史记录
       if (store.recordId) {
         try {
-          // 收集所有生成的图片文件名
-          const generatedImages = event.images.filter(img => img !== null)
+          // event.images 现在是完整数组（包含 null），保持索引对应关系
+          const generatedImages = event.images
+          const validImages = generatedImages.filter(img => img !== null)
 
           // 确定状态
           let status = 'completed'
           if (hasFailedImages.value) {
-            status = generatedImages.length > 0 ? 'partial' : 'draft'
-          } else if (generatedImages.length < store.outline.pages.length) {
+            status = validImages.length > 0 ? 'partial' : 'draft'
+          } else if (validImages.length < store.outline.pages.length) {
             // 部分生成完成（没有失败，但也没有全部生成）
             status = 'partial'
           }
 
-          // 获取封面图作为缩略图（只保存文件名，不是完整URL）
-          const thumbnail = generatedImages.length > 0 ? generatedImages[0] : null
+          // 获取封面图作为缩略图（找到第一个非 null 的图片）
+          const thumbnail = validImages.length > 0 ? validImages[0] : null
 
           await updateHistory(store.recordId, {
             images: {
               task_id: event.task_id,
-              generated: generatedImages
+              generated: generatedImages  // 保存完整数组
             },
             status: status,
             thumbnail: thumbnail
