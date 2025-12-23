@@ -2,11 +2,14 @@ import logging
 import os
 import re
 import json
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from backend.utils.text_client import get_text_chat_client
+from backend.utils.logger import get_detailed_logger
 
 logger = logging.getLogger(__name__)
+detailed_logger = get_detailed_logger(__name__)
 
 
 class OutlineService:
@@ -157,13 +160,19 @@ class OutlineService:
         topic: str,
         images: Optional[List[bytes]] = None
     ) -> Dict[str, Any]:
+        start_time = time.time()
+
         try:
-            logger.info(f"开始生成大纲: topic={topic[:50]}..., images={len(images) if images else 0}")
+            # 记录开始
+            has_images = images is not None and len(images) > 0
+            image_count = len(images) if images else 0
+            detailed_logger.log_outline_start(topic, has_images, image_count)
+
+            # 构建提示词
             prompt = self.prompt_template.format(topic=topic)
 
-            if images and len(images) > 0:
-                prompt += f"\n\n注意：用户提供了 {len(images)} 张参考图片，请在生成大纲时考虑这些图片的内容和风格。这些图片可能是产品图、个人照片或场景图，请根据图片内容来优化大纲，使生成的内容与图片相关联。"
-                logger.debug(f"添加了 {len(images)} 张参考图片到提示词")
+            if has_images:
+                prompt += f"\n\n注意：用户提供了 {image_count} 张参考图片，请在生成大纲时考虑这些图片的内容和风格。这些图片可能是产品图、个人照片或场景图，请根据图片内容来优化大纲，使生成的内容与图片相关联。"
 
             # 从配置中获取模型参数
             active_provider = self.text_config.get('active_provider', 'google_gemini')
@@ -174,7 +183,16 @@ class OutlineService:
             temperature = provider_config.get('temperature', 1.0)
             max_output_tokens = provider_config.get('max_output_tokens', 8000)
 
-            logger.info(f"调用文本生成 API: model={model}, temperature={temperature}")
+            # 记录 API 调用详情
+            detailed_logger.log_outline_api_call(
+                provider=active_provider,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_output_tokens,
+                prompt_length=len(prompt)
+            )
+
+            # 调用 API
             outline_text = self.client.generate_text(
                 prompt=prompt,
                 model=model,
@@ -183,23 +201,31 @@ class OutlineService:
                 images=images
             )
 
-            logger.debug(f"API 返回文本长度: {len(outline_text)} 字符")
+            # 解析结果
             pages = self._parse_outline(outline_text)
-            logger.info(f"大纲解析完成，共 {len(pages)} 页")
+
+            # 记录成功
+            elapsed = time.time() - start_time
+            detailed_logger.log_outline_success(
+                outline_length=len(outline_text),
+                page_count=len(pages),
+                elapsed_time=elapsed
+            )
 
             return {
                 "success": True,
                 "outline": outline_text,
                 "pages": pages,
-                "has_images": images is not None and len(images) > 0
+                "has_images": has_images
             }
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"大纲生成失败: {error_msg}")
 
-            # 根据错误类型提供更详细的错误信息
+            # 确定错误类型
+            error_type = "未知错误"
             if "api_key" in error_msg.lower() or "unauthorized" in error_msg.lower() or "401" in error_msg:
+                error_type = "API 认证失败"
                 detailed_error = (
                     f"API 认证失败。\n"
                     f"错误详情: {error_msg}\n"
@@ -209,6 +235,7 @@ class OutlineService:
                     "解决方案：在系统设置页面检查并更新 API Key"
                 )
             elif "model" in error_msg.lower() or "404" in error_msg:
+                error_type = "模型访问失败"
                 detailed_error = (
                     f"模型访问失败。\n"
                     f"错误详情: {error_msg}\n"
@@ -218,6 +245,7 @@ class OutlineService:
                     "解决方案：在系统设置页面检查模型名称配置"
                 )
             elif "timeout" in error_msg.lower() or "连接" in error_msg:
+                error_type = "网络连接失败"
                 detailed_error = (
                     f"网络连接失败。\n"
                     f"错误详情: {error_msg}\n"
@@ -228,6 +256,7 @@ class OutlineService:
                     "解决方案：检查网络连接，稍后重试"
                 )
             elif "rate" in error_msg.lower() or "429" in error_msg or "quota" in error_msg.lower():
+                error_type = "API 配额限制"
                 detailed_error = (
                     f"API 配额限制。\n"
                     f"错误详情: {error_msg}\n"
@@ -246,6 +275,9 @@ class OutlineService:
                     "3. 模型无法访问或不存在\n"
                     "建议：在系统设置页面检查文本服务商配置"
                 )
+
+            # 记录详细错误
+            detailed_logger.log_outline_error(error_msg, error_type)
 
             return {
                 "success": False,

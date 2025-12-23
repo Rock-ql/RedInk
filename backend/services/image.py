@@ -9,8 +9,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Generator, List, Optional, Tuple
 from backend.generators.factory import ImageGeneratorFactory
 from backend.utils.image_compressor import compress_image
+from backend.utils.logger import get_detailed_logger
 
 logger = logging.getLogger(__name__)
+detailed_logger = get_detailed_logger(__name__)
 
 
 class ImageService:
@@ -228,8 +230,6 @@ class ImageService:
 
         for attempt in range(max_retries):
             try:
-                logger.debug(f"生成图片 [{index}]: type={page_type}, attempt={attempt + 1}/{max_retries}")
-
                 # 根据配置选择模板（短 prompt 或完整 prompt）
                 if self.use_short_prompt and self.prompt_template_short:
                     # 短 prompt 模式：只包含页面类型和内容
@@ -237,7 +237,6 @@ class ImageService:
                         page_content=page_content,
                         page_type=page_type
                     )
-                    logger.debug(f"  使用短 prompt 模式 ({len(prompt)} 字符)")
                 else:
                     # 完整 prompt 模式：包含大纲和用户需求
                     prompt = self.prompt_template.format(
@@ -247,7 +246,24 @@ class ImageService:
                         user_topic=user_topic if user_topic else "未提供"
                     )
 
+                # 获取模型信息
+                model = self.provider_config.get('model', '未知')
+
+                # 记录 API 调用详情（仅第一次尝试记录详细信息）
+                if attempt == 0:
+                    detailed_logger.log_image_api_call(
+                        index=index,
+                        page_type=page_type,
+                        provider=self.provider_name,
+                        model=model,
+                        prompt_length=len(prompt),
+                        has_reference=reference_image is not None or (user_images is not None and len(user_images) > 0),
+                        attempt=attempt + 1 if max_retries > 1 else 0,
+                        max_attempts=max_retries if max_retries > 1 else 0
+                    )
+
                 # 调用生成器生成图片
+                image_start_time = time.time()
                 if self.provider_config.get('type') == 'google_genai':
                     logger.debug(f"  使用 Google GenAI 生成器")
                     image_data = self.generator.generate_image(
@@ -285,23 +301,42 @@ class ImageService:
 
                 # 保存图片（使用当前任务目录）
                 filename = f"{index}.png"
-                self._save_image(image_data, filename, self.current_task_dir)
-                logger.info(f"✅ 图片 [{index}] 生成成功: {filename}")
+                filepath = self._save_image(image_data, filename, self.current_task_dir)
+
+                # 获取文件大小
+                file_size = os.path.getsize(filepath)
+                elapsed = time.time() - image_start_time
+
+                # 记录成功
+                detailed_logger.log_image_success(
+                    index=index,
+                    filename=filename,
+                    file_size=file_size,
+                    compressed=True,  # 我们总是压缩图片
+                    elapsed_time=elapsed
+                )
 
                 return (index, True, filename, None)
 
             except Exception as e:
                 error_msg = str(e)
-                logger.warning(f"图片 [{index}] 生成失败 (尝试 {attempt + 1}/{max_retries}): {error_msg[:200]}")
 
-                if attempt < max_retries - 1:
+                # 判断是否还会重试
+                will_retry = attempt < max_retries - 1
+
+                # 记录错误
+                detailed_logger.log_image_error(
+                    index=index,
+                    error_msg=error_msg,
+                    will_retry=will_retry
+                )
+
+                if will_retry:
                     # 等待后重试
                     wait_time = 2 ** attempt
-                    logger.debug(f"  等待 {wait_time} 秒后重试...")
                     time.sleep(wait_time)
                     continue
 
-                logger.error(f"❌ 图片 [{index}] 生成失败，已达最大重试次数")
                 return (index, False, None, error_msg)
 
         return (index, False, None, "超过最大重试次数")
@@ -328,15 +363,18 @@ class ImageService:
         Yields:
             进度事件字典
         """
+        start_time = time.time()
+
         if task_id is None:
             task_id = f"task_{uuid.uuid4().hex[:8]}"
 
-        logger.info(f"开始图片生成任务: task_id={task_id}, pages={len(pages)}")
+        # 记录任务开始
+        use_reference = user_images is not None and len(user_images) > 0
+        detailed_logger.log_image_generation_start(task_id, len(pages), use_reference)
 
         # 创建任务专属目录
         self.current_task_dir = os.path.join(self.history_root_dir, task_id)
         os.makedirs(self.current_task_dir, exist_ok=True)
-        logger.debug(f"任务目录: {self.current_task_dir}")
 
         total = len(pages)
         generated_images = []
@@ -594,6 +632,15 @@ class ImageService:
                         }
 
         # ==================== 完成 ====================
+        # 记录批量生成完成
+        elapsed_total = time.time() - start_time
+        detailed_logger.log_batch_complete(
+            total=total,
+            success=len(generated_images),
+            failed=len(failed_pages),
+            elapsed_time=elapsed_total
+        )
+
         yield {
             "event": "finish",
             "data": {
