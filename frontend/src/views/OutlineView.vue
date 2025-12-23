@@ -14,7 +14,23 @@
         <button class="btn btn-secondary" @click="goBack" style="background: white; border: 1px solid var(--border-color);">
           上一步
         </button>
-        <button class="btn btn-primary" @click="generateAll" :disabled="store.outlineGenerating || store.outline.pages.length === 0">
+        <button
+          v-if="store.outline.pages.length === 0 && !store.outlineGenerating"
+          class="btn btn-primary"
+          @click="regenerateOutline"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
+            <path d="M23 4v6h-6"></path>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          </svg>
+          重新生成大纲
+        </button>
+        <button
+          v-else
+          class="btn btn-primary"
+          @click="generateAll"
+          :disabled="store.outlineGenerating || store.outline.pages.length === 0"
+        >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path><line x1="16" y1="8" x2="2" y2="22"></line><line x1="17.5" y1="15" x2="9" y2="15"></line></svg>
           一键生成全部
         </button>
@@ -30,9 +46,30 @@
             <span></span>
             <span></span>
           </div>
-          <div class="generating-hint">正在生成下一页...</div>
+          <div class="generating-hint">正在生成大纲...</div>
         </div>
       </div>
+    </div>
+
+    <!-- 空状态 - 大纲为空且不在生成中 -->
+    <div v-else-if="store.outline.pages.length === 0" class="empty-state">
+      <div class="empty-icon">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ddd" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="12" y1="11" x2="12" y2="17"></line>
+          <line x1="9" y1="14" x2="15" y2="14"></line>
+        </svg>
+      </div>
+      <h3 class="empty-title">暂无大纲内容</h3>
+      <p class="empty-desc">点击下方按钮为「{{ store.topic || '未知主题' }}」生成大纲</p>
+      <button class="btn btn-primary btn-lg" @click="regenerateOutline">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;">
+          <path d="M23 4v6h-6"></path>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+        </svg>
+        生成大纲
+      </button>
     </div>
 
     <!-- 已生成的大纲 -->
@@ -55,10 +92,16 @@
           </div>
 
           <div class="card-controls">
+            <button class="icon-btn refresh-btn" @click="regeneratePageContent(page.index)" title="重新生成此页文案">
+               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                 <path d="M23 4v6h-6"></path>
+                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+               </svg>
+            </button>
             <div class="drag-handle" title="拖拽排序">
                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></svg>
             </div>
-            <button class="icon-btn" @click="deletePage(idx)" title="删除此页">
+            <button class="icon-btn delete-btn" @click="deletePage(idx)" title="删除此页">
                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
           </div>
@@ -226,6 +269,64 @@ const generateSingle = (pageIndex: number) => {
   router.push('/generate')
 }
 
+// 重新生成整个大纲
+const regenerateOutline = async () => {
+  if (!store.topic) {
+    error.value = '缺少主题，无法重新生成'
+    return
+  }
+
+  // 标记为生成中
+  store.outlineGenerating = true
+  error.value = ''
+
+  try {
+    const result = await generateOutline(
+      store.topic,
+      store.userImages.length > 0 ? store.userImages : undefined
+    )
+
+    if (result.success && result.pages) {
+      store.setOutline(result.outline || '', result.pages)
+
+      // 更新历史记录
+      if (store.recordId) {
+        try {
+          await updateHistory(store.recordId, {
+            outline: {
+              raw: result.outline || '',
+              pages: result.pages
+            }
+          })
+          console.log('大纲已更新到历史记录')
+        } catch (e) {
+          console.error('更新历史记录失败:', e)
+        }
+      }
+    } else {
+      error.value = result.error || '生成大纲失败'
+    }
+  } catch (err: any) {
+    error.value = err.message || '网络错误，请重试'
+  } finally {
+    store.outlineGenerating = false
+  }
+}
+
+// 重新生成单页文案（重新生成整个大纲，但只替换指定页）
+const regeneratePageContent = async (pageIndex: number) => {
+  if (!store.topic) {
+    error.value = '缺少主题，无法重新生成'
+    return
+  }
+
+  if (!confirm('将重新生成整个大纲，此操作会更新所有页面的文案内容。确定继续吗？')) {
+    return
+  }
+
+  await regenerateOutline()
+}
+
 // 页面加载时检查是否需要生成大纲
 onMounted(async () => {
   // 如果没有主题，返回首页
@@ -384,7 +485,8 @@ onMounted(async () => {
   padding: 2px;
   transition: color 0.2s;
 }
-.icon-btn:hover { color: #FF4D4F; }
+.icon-btn.delete-btn:hover { color: #FF4D4F; }
+.icon-btn.refresh-btn:hover { color: var(--primary); }
 
 /* 文本区域 - 核心 */
 .textarea-paper {
@@ -567,5 +669,40 @@ onMounted(async () => {
 @keyframes slideUp {
   from { opacity: 0; transform: translate(-50%, 20px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* 空状态 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.empty-icon {
+  margin-bottom: 24px;
+  opacity: 0.6;
+}
+
+.empty-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+  margin: 0 0 12px 0;
+}
+
+.empty-desc {
+  font-size: 14px;
+  color: #999;
+  margin: 0 0 32px 0;
+  max-width: 300px;
+}
+
+.btn-lg {
+  padding: 14px 32px;
+  font-size: 15px;
 }
 </style>
