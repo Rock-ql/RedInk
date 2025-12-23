@@ -227,18 +227,32 @@ async function loadRecord(id: string) {
     store.setTopic(res.record.title)
     store.setOutline(res.record.outline.raw, res.record.outline.pages)
     store.recordId = res.record.id
+
+    // 只恢复已生成成功的图片，未生成的不要初始化
     if (res.record.images.generated.length > 0) {
       store.taskId = res.record.images.task_id
-      store.images = res.record.outline.pages.map((page, idx) => {
-        const filename = res.record!.images.generated[idx]
-        return {
-          index: idx,
-          url: filename ? `/api/images/${res.record!.images.task_id}/${filename}` : '',
-          status: filename ? 'done' : 'error',
-          retryable: !filename
-        }
-      })
+      // 只保留有效的已生成图片
+      const validImages = res.record.outline.pages
+        .map((page, idx) => {
+          const filename = res.record!.images.generated[idx]
+          if (filename) {
+            return {
+              index: idx,
+              url: `/api/images/${res.record!.images.task_id}/${filename}`,
+              status: 'done' as const
+            }
+          }
+          return null
+        })
+        .filter(img => img !== null)
+
+      store.images = validImages as any[]
+    } else {
+      // 没有生成过图片，清空 images
+      store.images = []
+      store.taskId = null
     }
+
     router.push('/outline')
   }
 }
