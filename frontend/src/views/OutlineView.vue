@@ -9,16 +9,16 @@
         <button class="btn btn-secondary" @click="goBack" style="background: white; border: 1px solid var(--border-color);">
           上一步
         </button>
-        <button class="btn btn-primary" @click="startGeneration">
+        <button class="btn btn-primary" @click="generateAll">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path><line x1="16" y1="8" x2="2" y2="22"></line><line x1="17.5" y1="15" x2="9" y2="15"></line></svg>
-          开始生成图片
+          一键生成全部
         </button>
       </div>
     </div>
 
     <div class="outline-grid">
-      <div 
-        v-for="(page, idx) in store.outline.pages" 
+      <div
+        v-for="(page, idx) in store.outline.pages"
         :key="page.index"
         class="card outline-card"
         :draggable="true"
@@ -33,7 +33,7 @@
              <span class="page-number">P{{ idx + 1 }}</span>
              <span class="page-type" :class="page.type">{{ getPageTypeName(page.type) }}</span>
           </div>
-          
+
           <div class="card-controls">
             <div class="drag-handle" title="拖拽排序">
                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></svg>
@@ -50,8 +50,17 @@
           placeholder="在此输入文案..."
           @input="store.updatePage(page.index, page.content)"
         />
-        
-        <div class="word-count">{{ page.content.length }} 字</div>
+
+        <div class="card-bottom-bar">
+          <div class="word-count">{{ page.content.length }} 字</div>
+          <button class="generate-btn" @click="generateSingle(page.index)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path>
+              <line x1="16" y1="8" x2="2" y2="22"></line>
+            </svg>
+            生成
+          </button>
+        </div>
       </div>
 
       <!-- 添加按钮卡片 -->
@@ -62,7 +71,7 @@
         </div>
       </div>
     </div>
-    
+
     <div style="height: 100px;"></div>
   </div>
 </template>
@@ -127,7 +136,15 @@ const goBack = () => {
   router.back()
 }
 
-const startGeneration = () => {
+// 生成全部页面
+const generateAll = () => {
+  store.setPagesToGenerate([])  // 空数组表示生成全部
+  router.push('/generate')
+}
+
+// 生成单个页面
+const generateSingle = (pageIndex: number) => {
+  store.setPagesToGenerate([pageIndex])
   router.push('/generate')
 }
 </script>
@@ -252,7 +269,45 @@ const startGeneration = () => {
   text-align: right;
   font-size: 11px;
   color: #ddd;
+}
+
+/* 底部栏 */
+.card-bottom-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid #f5f5f5;
+}
+
+.generate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  opacity: 0;
+}
+
+.outline-card:hover .generate-btn {
+  opacity: 1;
+}
+
+.generate-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.generate-btn:active {
+  transform: translateY(0);
 }
 
 /* 添加卡片 */

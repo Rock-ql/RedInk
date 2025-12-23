@@ -40,6 +40,9 @@ export interface GeneratorState {
 
   // 用户上传的图片（用于图片生成参考）
   userImages: File[]
+
+  // 待生成的页面索引列表（用于选择性生成）
+  pagesToGenerate: number[]
 }
 
 const STORAGE_KEY = 'generator-state'
@@ -94,7 +97,8 @@ export const useGeneratorStore = defineStore('generator', {
       images: saved.images || [],
       taskId: saved.taskId || null,
       recordId: saved.recordId || null,
-      userImages: []  // 不从 localStorage 恢复
+      userImages: [],  // 不从 localStorage 恢复
+      pagesToGenerate: []  // 待生成的页面索引列表
     }
   },
 
@@ -183,17 +187,53 @@ export const useGeneratorStore = defineStore('generator', {
       this.syncRawFromPages()
     },
 
-    // 开始生成
+    // 设置待生成的页面索引
+    setPagesToGenerate(indices: number[]) {
+      this.pagesToGenerate = indices
+    },
+
+    // 开始生成（支持选择性生成）
     startGeneration() {
       this.stage = 'generating'
+      // 如果有指定待生成的页面，只生成这些页面；否则生成全部
+      const pagesToGen = this.pagesToGenerate.length > 0
+        ? this.pagesToGenerate
+        : this.outline.pages.map(p => p.index)
+
       this.progress.current = 0
-      this.progress.total = this.outline.pages.length
+      this.progress.total = pagesToGen.length
       this.progress.status = 'generating'
-      this.images = this.outline.pages.map(page => ({
-        index: page.index,
-        url: '',
-        status: 'generating'
-      }))
+
+      // 初始化 images 数组，只为待生成的页面创建条目
+      // 保留已有的图片数据（用于增量生成场景）
+      const existingImages = new Map(this.images.map(img => [img.index, img]))
+
+      this.images = this.outline.pages.map(page => {
+        if (pagesToGen.includes(page.index)) {
+          // 需要生成的页面，设为 generating 状态
+          return {
+            index: page.index,
+            url: '',
+            status: 'generating' as const
+          }
+        } else {
+          // 不需要生成的页面，保留原有数据或设为空
+          const existing = existingImages.get(page.index)
+          return existing || {
+            index: page.index,
+            url: '',
+            status: 'done' as const  // 标记为已完成（跳过）
+          }
+        }
+      })
+    },
+
+    // 获取待生成的页面列表
+    getPagesToGenerate() {
+      const indices = this.pagesToGenerate.length > 0
+        ? this.pagesToGenerate
+        : this.outline.pages.map(p => p.index)
+      return this.outline.pages.filter(p => indices.includes(p.index))
     },
 
     // 更新进度
@@ -269,6 +309,7 @@ export const useGeneratorStore = defineStore('generator', {
       this.taskId = null
       this.recordId = null
       this.userImages = []
+      this.pagesToGenerate = []
       // 清除 localStorage
       localStorage.removeItem(STORAGE_KEY)
     },

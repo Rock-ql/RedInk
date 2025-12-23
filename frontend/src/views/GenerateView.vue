@@ -216,6 +216,9 @@ onMounted(async () => {
     return
   }
 
+  // 获取待生成的页面列表
+  const pagesToGenerate = store.getPagesToGenerate()
+
   // 创建历史记录（如果还没有）
   if (!store.recordId) {
     try {
@@ -235,7 +238,7 @@ onMounted(async () => {
   store.startGeneration()
 
   generateImagesPost(
-    store.outline.pages,
+    pagesToGenerate,  // 只传入需要生成的页面
     null,
     store.outline.raw,  // 传入完整大纲文本
     // onProgress
