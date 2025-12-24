@@ -377,8 +377,9 @@ class ImageService:
         os.makedirs(self.current_task_dir, exist_ok=True)
 
         total = len(pages)
-        # 初始化完整数组，保持与 pages 的索引对应，未生成的位置为 None
-        generated_images = [None] * total
+        # 初始化完整数组，长度根据最大索引值确定（支持部分生成）
+        max_index = max(page["index"] for page in pages)
+        generated_images = [None] * (max_index + 1)
         failed_pages = []
         cover_image_data = None
 
