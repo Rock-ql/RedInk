@@ -13,12 +13,37 @@ import os
 import json
 import base64
 import logging
+import re
 from flask import Blueprint, request, jsonify, Response, send_file
 from backend.services.image import get_image_service
 from backend.utils.auth import jwt_required, get_current_user_id
 from .utils import log_request, log_error
 
 logger = logging.getLogger(__name__)
+
+_SAFE_SEGMENT_RE = re.compile(r'^[A-Za-z0-9._-]+$')
+_ALLOWED_IMAGE_EXTS = {'.png', '.jpg', '.jpeg'}
+
+
+def _validate_path_segment(segment: str, name: str) -> str:
+    """校验路径片段，避免路径穿越"""
+    if not segment or segment in {'.', '..'}:
+        raise ValueError(f"{name} 无效")
+    if not _SAFE_SEGMENT_RE.match(segment):
+        raise ValueError(f"{name} 包含非法字符")
+    for sep in (os.path.sep, os.path.altsep):
+        if sep and sep in segment:
+            raise ValueError(f"{name} 不能包含路径分隔符")
+    return segment
+
+
+def _safe_join(base_dir: str, *paths: str) -> str:
+    """安全拼接路径，确保结果仍在 base_dir 内"""
+    base_dir_abs = os.path.abspath(base_dir)
+    candidate = os.path.abspath(os.path.join(base_dir_abs, *paths))
+    if os.path.commonpath([candidate, base_dir_abs]) != base_dir_abs:
+        raise ValueError("路径非法")
+    return candidate
 
 
 def create_image_blueprint():
@@ -47,7 +72,9 @@ def create_image_blueprint():
         - complete: 全部完成
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             pages = data.get('pages')
             task_id = data.get('task_id')
             full_outline = data.get('full_outline', '')
@@ -63,11 +90,22 @@ def create_image_blueprint():
                 'user_images': user_images
             })
 
-            if not pages:
+            if not isinstance(pages, list) or not pages:
                 logger.warning("图片生成请求缺少 pages 参数")
                 return jsonify({
                     "success": False,
                     "error": "参数错误：pages 不能为空。\n请提供要生成的页面列表数据。"
+                }), 400
+            if any(
+                (not isinstance(page, dict) or
+                 "index" not in page or
+                 "type" not in page or
+                 "content" not in page)
+                for page in pages
+            ):
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：pages 格式不正确"
                 }), 400
 
             logger.info(f"🖼️  开始图片生成任务: {task_id}, 共 {len(pages)} 页")
@@ -135,16 +173,35 @@ def create_image_blueprint():
                 "history"
             )
 
+            try:
+                safe_task_id = _validate_path_segment(task_id, "task_id")
+                safe_filename = _validate_path_segment(filename, "filename")
+            except ValueError as e:
+                return jsonify({
+                    "success": False,
+                    "error": f"参数错误：{str(e)}"
+                }), 400
+
+            ext = os.path.splitext(safe_filename)[1].lower()
+            if ext not in _ALLOWED_IMAGE_EXTS:
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：不支持的图片格式"
+                }), 400
+
             if thumbnail:
                 # 尝试返回缩略图
-                thumb_filename = f"thumb_{filename}"
-                thumb_filepath = os.path.join(history_root, task_id, thumb_filename)
+                if safe_filename.startswith('thumb_'):
+                    thumb_filename = safe_filename
+                else:
+                    thumb_filename = f"thumb_{safe_filename}"
+                thumb_filepath = _safe_join(history_root, safe_task_id, thumb_filename)
 
                 if os.path.exists(thumb_filepath):
                     return send_file(thumb_filepath, mimetype='image/png')
 
             # 返回原图
-            filepath = os.path.join(history_root, task_id, filename)
+            filepath = _safe_join(history_root, safe_task_id, safe_filename)
 
             if not os.path.exists(filepath):
                 return jsonify({
@@ -154,6 +211,11 @@ def create_image_blueprint():
 
             return send_file(filepath, mimetype='image/png')
 
+        except ValueError as e:
+            return jsonify({
+                "success": False,
+                "error": f"参数错误：{str(e)}"
+            }), 400
         except Exception as e:
             log_error('/images', e)
             error_msg = str(e)
@@ -180,7 +242,9 @@ def create_image_blueprint():
         - image_url: 新图片 URL
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             task_id = data.get('task_id')
             page = data.get('page')
             use_reference = data.get('use_reference', True)
@@ -190,11 +254,16 @@ def create_image_blueprint():
                 'page_index': page.get('index') if page else None
             })
 
-            if not task_id or not page:
+            if not task_id or not isinstance(page, dict):
                 logger.warning("重试请求缺少必要参数")
                 return jsonify({
                     "success": False,
                     "error": "参数错误：task_id 和 page 不能为空。\n请提供任务ID和页面信息。"
+                }), 400
+            if "index" not in page or "type" not in page or "content" not in page:
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：page 格式不正确"
                 }), 400
 
             logger.info(f"🔄 重试生成图片: task={task_id}, page={page.get('index')}")
@@ -231,7 +300,9 @@ def create_image_blueprint():
         SSE 事件流
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             task_id = data.get('task_id')
             pages = data.get('pages')
 
@@ -240,11 +311,22 @@ def create_image_blueprint():
                 'pages_count': len(pages) if pages else 0
             })
 
-            if not task_id or not pages:
+            if not task_id or not isinstance(pages, list) or not pages:
                 logger.warning("批量重试请求缺少必要参数")
                 return jsonify({
                     "success": False,
                     "error": "参数错误：task_id 和 pages 不能为空。\n请提供任务ID和要重试的页面列表。"
+                }), 400
+            if any(
+                (not isinstance(page, dict) or
+                 "index" not in page or
+                 "type" not in page or
+                 "content" not in page)
+                for page in pages
+            ):
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：pages 格式不正确"
                 }), 400
 
             logger.info(f"🔄 批量重试失败图片: task={task_id}, 共 {len(pages)} 页")
@@ -295,7 +377,9 @@ def create_image_blueprint():
         - image_url: 新图片 URL
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             task_id = data.get('task_id')
             page = data.get('page')
             use_reference = data.get('use_reference', True)
@@ -307,11 +391,16 @@ def create_image_blueprint():
                 'page_index': page.get('index') if page else None
             })
 
-            if not task_id or not page:
+            if not task_id or not isinstance(page, dict):
                 logger.warning("重新生成请求缺少必要参数")
                 return jsonify({
                     "success": False,
                     "error": "参数错误：task_id 和 page 不能为空。\n请提供任务ID和页面信息。"
+                }), 400
+            if "index" not in page or "type" not in page or "content" not in page:
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：page 格式不正确"
                 }), 400
 
             logger.info(f"🔄 重新生成图片: task={task_id}, page={page.get('index')}")
@@ -417,14 +506,19 @@ def _parse_base64_images(images_base64: list) -> list:
     Returns:
         list: 解码后的图片二进制数据列表
     """
-    if not images_base64:
+    if not images_base64 or not isinstance(images_base64, list):
         return []
 
     images = []
     for img_b64 in images_base64:
+        if not isinstance(img_b64, str):
+            continue
         # 移除可能的 data URL 前缀（如 data:image/png;base64,）
         if ',' in img_b64:
             img_b64 = img_b64.split(',')[1]
-        images.append(base64.b64decode(img_b64))
+        try:
+            images.append(base64.b64decode(img_b64))
+        except Exception:
+            continue
 
     return images

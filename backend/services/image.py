@@ -14,6 +14,9 @@ from backend.utils.logger import get_detailed_logger
 logger = logging.getLogger(__name__)
 detailed_logger = get_detailed_logger(__name__)
 
+_TASK_STATES: Dict[str, Dict[str, Any]] = {}
+_TASK_STATES_LOCK = threading.RLock()
+
 
 class ImageService:
     """图片生成服务类"""
@@ -92,7 +95,8 @@ class ImageService:
         self.current_task_dir = None
 
         # 存储任务状态（用于重试）
-        self._task_states: Dict[str, Dict] = {}
+        self._task_states = _TASK_STATES
+        self._task_states_lock = _TASK_STATES_LOCK
 
         logger.info(f"ImageService 初始化完成: provider={provider_name}, type={provider_type}")
 
@@ -389,15 +393,17 @@ class ImageService:
             compressed_user_images = [compress_image(img, max_size_kb=200) for img in user_images]
 
         # 初始化任务状态
-        self._task_states[task_id] = {
-            "pages": pages,
-            "generated": {},
-            "failed": {},
-            "cover_image": None,
-            "full_outline": full_outline,
-            "user_images": compressed_user_images,
-            "user_topic": user_topic
-        }
+        with self._task_states_lock:
+            self._task_states[task_id] = {
+                "pages": pages,
+                "generated": {},
+                "failed": {},
+                "cover_image": None,
+                "cover_filename": None,
+                "full_outline": full_outline,
+                "user_images": compressed_user_images,
+                "user_topic": user_topic
+            }
 
         # ==================== 第一阶段：生成封面 ====================
         cover_page = None
@@ -436,7 +442,9 @@ class ImageService:
 
             if success:
                 generated_images[index] = filename
-                self._task_states[task_id]["generated"][index] = filename
+                with self._task_states_lock:
+                    if task_id in self._task_states:
+                        self._task_states[task_id]["generated"][index] = filename
 
                 # 读取封面图片作为参考，并立即压缩到200KB以内
                 cover_path = os.path.join(self.current_task_dir, filename)
@@ -445,7 +453,10 @@ class ImageService:
 
                 # 压缩封面图（减少内存占用和后续传输开销）
                 cover_image_data = compress_image(cover_image_data, max_size_kb=200)
-                self._task_states[task_id]["cover_image"] = cover_image_data
+                with self._task_states_lock:
+                    if task_id in self._task_states:
+                        self._task_states[task_id]["cover_image"] = cover_image_data
+                        self._task_states[task_id]["cover_filename"] = filename
 
                 yield {
                     "event": "complete",
@@ -458,7 +469,9 @@ class ImageService:
                 }
             else:
                 failed_pages.append(cover_page)
-                self._task_states[task_id]["failed"][index] = error
+                with self._task_states_lock:
+                    if task_id in self._task_states:
+                        self._task_states[task_id]["failed"][index] = error
 
                 yield {
                     "event": "error",
@@ -527,7 +540,9 @@ class ImageService:
 
                             if success:
                                 generated_images[index] = filename
-                                self._task_states[task_id]["generated"][index] = filename
+                                with self._task_states_lock:
+                                    if task_id in self._task_states:
+                                        self._task_states[task_id]["generated"][index] = filename
 
                                 yield {
                                     "event": "complete",
@@ -540,7 +555,9 @@ class ImageService:
                                 }
                             else:
                                 failed_pages.append(page)
-                                self._task_states[task_id]["failed"][index] = error
+                                with self._task_states_lock:
+                                    if task_id in self._task_states:
+                                        self._task_states[task_id]["failed"][index] = error
 
                                 yield {
                                     "event": "error",
@@ -556,7 +573,9 @@ class ImageService:
                         except Exception as e:
                             failed_pages.append(page)
                             error_msg = str(e)
-                            self._task_states[task_id]["failed"][page["index"]] = error_msg
+                            with self._task_states_lock:
+                                if task_id in self._task_states:
+                                    self._task_states[task_id]["failed"][page["index"]] = error_msg
 
                             yield {
                                 "event": "error",
@@ -607,7 +626,9 @@ class ImageService:
 
                     if success:
                         generated_images[index] = filename
-                        self._task_states[task_id]["generated"][index] = filename
+                        with self._task_states_lock:
+                            if task_id in self._task_states:
+                                self._task_states[task_id]["generated"][index] = filename
 
                         yield {
                             "event": "complete",
@@ -620,7 +641,9 @@ class ImageService:
                         }
                     else:
                         failed_pages.append(page)
-                        self._task_states[task_id]["failed"][index] = error
+                        with self._task_states_lock:
+                            if task_id in self._task_states:
+                                self._task_states[task_id]["failed"][index] = error
 
                         yield {
                             "event": "error",
@@ -685,8 +708,9 @@ class ImageService:
         user_images = None
 
         # 首先尝试从任务状态中获取上下文
-        if task_id in self._task_states:
-            task_state = self._task_states[task_id]
+        with self._task_states_lock:
+            task_state = self._task_states.get(task_id)
+        if task_state:
             if use_reference:
                 reference_image = task_state.get("cover_image")
             # 如果没有传入上下文，则使用任务状态中的
@@ -695,10 +719,18 @@ class ImageService:
             if not user_topic:
                 user_topic = task_state.get("user_topic", "")
             user_images = task_state.get("user_images")
+            cover_filename = task_state.get("cover_filename")
+            if not cover_filename:
+                generated = task_state.get("generated", {})
+                if generated:
+                    cover_filename = generated.get(min(generated.keys()))
+        else:
+            cover_filename = None
 
         # 如果任务状态中没有封面图，尝试从文件系统加载
         if use_reference and reference_image is None:
-            cover_path = os.path.join(self.current_task_dir, "0.png")
+            fallback_cover = cover_filename or "0.png"
+            cover_path = os.path.join(self.current_task_dir, fallback_cover)
             if os.path.exists(cover_path):
                 with open(cover_path, "rb") as f:
                     cover_data = f.read()
@@ -716,10 +748,11 @@ class ImageService:
         )
 
         if success:
-            if task_id in self._task_states:
-                self._task_states[task_id]["generated"][index] = filename
-                if index in self._task_states[task_id]["failed"]:
-                    del self._task_states[task_id]["failed"][index]
+            with self._task_states_lock:
+                if task_id in self._task_states:
+                    self._task_states[task_id]["generated"][index] = filename
+                    if index in self._task_states[task_id]["failed"]:
+                        del self._task_states[task_id]["failed"][index]
 
             return {
                 "success": True,
@@ -751,8 +784,10 @@ class ImageService:
         """
         # 获取参考图
         reference_image = None
-        if task_id in self._task_states:
-            reference_image = self._task_states[task_id].get("cover_image")
+        with self._task_states_lock:
+            task_state = self._task_states.get(task_id)
+        if task_state:
+            reference_image = task_state.get("cover_image")
 
         total = len(pages)
         success_count = 0
@@ -769,8 +804,12 @@ class ImageService:
         # 并发重试
         # 从任务状态中获取完整大纲
         full_outline = ""
-        if task_id in self._task_states:
-            full_outline = self._task_states[task_id].get("full_outline", "")
+        user_images = None
+        user_topic = ""
+        if task_state:
+            full_outline = task_state.get("full_outline", "")
+            user_images = task_state.get("user_images")
+            user_topic = task_state.get("user_topic", "")
 
         with ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT) as executor:
             future_to_page = {
@@ -780,7 +819,9 @@ class ImageService:
                     task_id,
                     reference_image,
                     0,  # retry_count
-                    full_outline  # 传入完整大纲
+                    full_outline,  # 传入完整大纲
+                    user_images,
+                    user_topic
                 ): page
                 for page in pages
             }
@@ -792,10 +833,11 @@ class ImageService:
 
                     if success:
                         success_count += 1
-                        if task_id in self._task_states:
-                            self._task_states[task_id]["generated"][index] = filename
-                            if index in self._task_states[task_id]["failed"]:
-                                del self._task_states[task_id]["failed"][index]
+                        with self._task_states_lock:
+                            if task_id in self._task_states:
+                                self._task_states[task_id]["generated"][index] = filename
+                                if index in self._task_states[task_id]["failed"]:
+                                    del self._task_states[task_id]["failed"][index]
 
                         yield {
                             "event": "complete",
@@ -882,12 +924,26 @@ class ImageService:
 
     def get_task_state(self, task_id: str) -> Optional[Dict]:
         """获取任务状态"""
-        return self._task_states.get(task_id)
+        with self._task_states_lock:
+            state = self._task_states.get(task_id)
+            if state is None:
+                return None
+            return {
+                "pages": state.get("pages"),
+                "generated": state.get("generated"),
+                "failed": state.get("failed"),
+                "cover_image": state.get("cover_image"),
+                "cover_filename": state.get("cover_filename"),
+                "full_outline": state.get("full_outline"),
+                "user_images": state.get("user_images"),
+                "user_topic": state.get("user_topic")
+            }
 
     def cleanup_task(self, task_id: str):
         """清理任务状态（释放内存）"""
-        if task_id in self._task_states:
-            del self._task_states[task_id]
+        with self._task_states_lock:
+            if task_id in self._task_states:
+                del self._task_states[task_id]
 
 
 # 全局服务实例

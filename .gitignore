@@ -82,6 +82,9 @@ htmlcov/
 test_*.py
 debug_*.py
 
+# 允许提交 tests/ 下的正式用例
+!tests/test_*.py
+
 # Dev notes
 DEV_NOTES.md
 commit_message.txt

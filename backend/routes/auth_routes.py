@@ -44,7 +44,9 @@ def create_auth_blueprint():
         - token: JWT Token
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
 
             username = data.get('username', '').strip()
             password = data.get('password', '')
@@ -127,7 +129,9 @@ def create_auth_blueprint():
         - token: JWT Token
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
 
             username = data.get('username', '').strip()
             password = data.get('password', '')

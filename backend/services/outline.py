@@ -131,7 +131,8 @@ class OutlineService:
 
         pages = []
 
-        for index, page_text in enumerate(pages_raw):
+        page_index = 0
+        for page_text in pages_raw:
             page_text = page_text.strip()
             if not page_text:
                 continue
@@ -148,10 +149,11 @@ class OutlineService:
                 page_type = type_mapping.get(type_cn, "content")
 
             pages.append({
-                "index": index,
+                "index": page_index,
                 "type": page_type,
                 "content": page_text
             })
+            page_index += 1
 
         return pages
 

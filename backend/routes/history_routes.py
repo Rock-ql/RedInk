@@ -42,10 +42,23 @@ def create_history_blueprint():
         - record_id: 新创建的记录 ID
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             topic = data.get('topic')
             outline = data.get('outline')
             task_id = data.get('task_id')
+
+            if outline is not None and not isinstance(outline, dict):
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：outline 格式不正确"
+                }), 400
+            if isinstance(outline, dict) and not isinstance(outline.get('pages', []), list):
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：outline.pages 格式不正确"
+                }), 400
 
             if not topic or not outline:
                 return jsonify({
@@ -162,11 +175,30 @@ def create_history_blueprint():
         - success: 是否成功
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             outline = data.get('outline')
             images = data.get('images')
             status = data.get('status')
             thumbnail = data.get('thumbnail')
+
+            if outline is not None and not isinstance(outline, dict):
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：outline 格式不正确"
+                }), 400
+            if isinstance(outline, dict) and not isinstance(outline.get('pages', []), list):
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：outline.pages 格式不正确"
+                }), 400
+
+            if images is not None and not isinstance(images, dict):
+                return jsonify({
+                    "success": False,
+                    "error": "参数错误：images 格式不正确"
+                }), 400
 
             user_id = get_current_user_id()
             history_service = get_history_service()

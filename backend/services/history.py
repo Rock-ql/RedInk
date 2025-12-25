@@ -151,17 +151,24 @@ class HistoryService:
                 if task_id:
                     record.task_id = task_id
 
-                # 更新图片列表
-                generated = images.get('generated', [])
-                if generated:
+                # 更新图片列表（允许空值占位，保持索引一致）
+                if 'generated' in images:
+                    generated = images.get('generated')
+                    if generated is None:
+                        generated = []
+                    if not isinstance(generated, list):
+                        generated = []
+
                     # 删除旧的图片记录
                     TaskImage.query.filter_by(record_id=record_id).delete()
+
                     # 创建新的图片记录
                     for idx, filename in enumerate(generated):
+                        safe_name = '' if filename is None else str(filename)
                         task_image = TaskImage(
                             record_id=record_id,
                             image_index=idx,
-                            filename=filename
+                            filename=safe_name
                         )
                         db.session.add(task_image)
 

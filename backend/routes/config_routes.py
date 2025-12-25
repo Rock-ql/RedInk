@@ -86,7 +86,9 @@ def create_config_blueprint():
         - message: 结果消息
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             user_id = get_current_user_id()
 
             # 更新图片生成配置
@@ -132,7 +134,9 @@ def create_config_blueprint():
         - message: 测试结果消息
         """
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                data = {}
             provider_type = data.get('type')
             provider_name = data.get('provider_name')
             user_id = get_current_user_id()
